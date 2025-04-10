@@ -1,131 +1,43 @@
-from ast import Call
 import asyncio
 from doctest import UnexpectedException
 import json
 import logging
-from re import L
 from shutil import ExecError
-import stat
 from typing import Awaitable, Dict, List, Any, Optional, Tuple, Union, Callable
-from enum import Enum
-import time
-
-from attrs import field
 import httpx
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
-from langgraph.graph.message import add_messages
-from langgraph.types import Send
+# from langgraph.prebuilt import ToolNode
+# from langgraph.graph.message import add_messages
 from langgraph.graph.graph import CompiledGraph
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
-from ollama import ResponseError
-from pydantic import BaseModel, Field
+# from langchain_openai import ChatOpenAI
 
-#self
+from pydantic import BaseModel, Field
 from .prompts import THINKER_PROMPT
 from Utils.structured_llm import StructuredLLMHandler
+from Utils.routing_module import InternalState, Router, RouteConfig
+from Utils.schemas import (
+    Task, 
+    TaskPriority,
+    ThinkerOutputStruct,
+    ResearchResult
+)
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("AutoAgent")
 
-class TaskPriority(Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-class ResearchResult(BaseModel):
-    """Model for search results from research phase"""
-    url: str
-    title: str
-    description: str
-    relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    
-class Task(BaseModel):
-    """Model for a specific task to execute"""
-    task_description: str
-    website: Optional[str] = None
-    priority: Optional[TaskPriority] = TaskPriority.MEDIUM
-    validation_rules: Optional[List[str]] = None
-    
-class ThinkerOutputStruct(BaseModel):
-    Task : str | None = Field(description="This field contains Task for execution if user task is simple.", default=None)
-    Thought : str | None = Field(description="This field contains Thought for Research if user task is complex and requires Reserach.", default=None)
-    
-class InternalState(BaseModel):
-    def __init__(self, **kwargs):
-        self.kwargs = {kwargs}
-    
-class Router:
-    Router_mapings :Dict[str,Union[Callable]] = Field(default_factory=Dict)
-    
-    def _init_(self, name :str):
-        self.name = name
-
-    @classmethod
-    def create_router(cls, 
-                      state,
-                      from_node :str,
-                      direct_nodes : List[str],
-                      conditional_nodes : List[str],
-                      send : bool = False,
-                      send_to :str = None,
-                      ):
-    
-        def _routing_wrapper_(state,
-                              route_from,
-                              direct_nodes,
-                              conditional_nodes,
-                              send,
-                              send_to,):
-            
-            if send:
-                #Here internal_state_obj is of type : -> InternalState
-                return [Send(send_to, {"Internal_state": internal_state_obj}) for internal_state_obj in state.send_list[route_from]]
-            
-            _next_nodes = direct_nodes
-            _selected_nodes = state.routes[route_from]
-            for node in conditional_nodes:
-                if node in _selected_nodes:
-                    _next_nodes.append(node)
-            
-            return _next_nodes
-        
-        if send and not send_to:
-            raise ValueError("You must provide send_to node to for sending multiple states!")
-        
-        
-        wrapper_function = _routing_wrapper_(
-            state,
-            from_node,
-            direct_nodes,
-            conditional_nodes,
-            send
-        )
-        
-        cls.Router_mapings[from_node] = wrapper_function
-        return True
-    
-    @classmethod
-    def get_routing_function(cls, from_node :str):
-        try:
-            _func = cls.Router_mapings[from_node]
-            return _func
-        except Exception as e:
-            raise e 
-            
-    
 class AutoAgentState(BaseModel):
     """State model for AutoAgent"""
     user_task: str
     thoughts: List[str] = Field(default_factory=list)
-    routes: List[Union[List[str],str]] = Field(default_factory=list)
+    routes: Dict[str,List[str]] = Field(default_factory=dict)
+    route_config : Dict[str,RouteConfig] =Field(default_factory=dict)
     research_results: List[str] = Field(default_factory=list)
     tasks: List[Task] = Field(default_factory=list)
     execution_results: List[Dict[str, Any]] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
-    send_list : Dict[str, InternalState] = Field(default_factory=Dict)
+    send_list : Dict[str, List[InternalState]] = Field(default_factory=dict)
     messages: List[Union[HumanMessage, AIMessage]] = Field(default_factory=list)
 
 class AutoAgent:
@@ -167,7 +79,7 @@ class AutoAgent:
         self.verbose = verbose
         self.LLMHandler = StructuredLLMHandler(llm_dict=llm_dict, 
                                                fallback_llm=fallback_llm)
-        self.Router = Router(name = "autoagent")
+        self._Router :Router = Router(name = "autoagent")
         # Initialize HTTP client for API calls
         self.http_client = httpx.AsyncClient(timeout=timeout)
         
@@ -181,16 +93,16 @@ class AutoAgent:
         workflow = StateGraph(AutoAgentState)
         
         # Add nodes
-        workflow.add_node("thinker", RunnableLambda(self.thinker_node))
-        workflow.add_node("researcher", RunnableLambda(self.researcher_node))
-        workflow.add_node("validator", RunnableLambda(self.validator_node))
-        workflow.add_node("executor", RunnableLambda(self.executor_node))
+        workflow.add_node("thinker", self.thinker_node)
+        workflow.add_node("researcher", self.researcher_node)
+        # workflow.add_node("validator", RunnableLambda(self.validator_node))
+        workflow.add_node("executor", self.executor_node)
         
         # Define edges
-        workflow.add_edge("thinker", "researcher")
-        workflow.add_edge("researcher", "validator")
-        workflow.add_edge("validator", "executor")
-        workflow.add_edge("executor", END)
+        workflow.add_conditional_edges("thinker", self._Router.get_routing_function("thinker"))
+        # workflow.add_edge("researcher", "validator")
+        workflow.add_edge(["executor", "researcher"], END)
+        # workflow.add_edge("thinker", END)
         
         # Set the entry point
         workflow.set_entry_point("thinker")
@@ -208,7 +120,7 @@ class AutoAgent:
         Returns:
             Updated state with thinking results
         """
-        logger.info(f"Thinking about query: {state.query}")
+        logger.info(f"Thinking about query: {state.user_task}")
         
         try:
             user_task = state.user_task
@@ -216,11 +128,10 @@ class AutoAgent:
             response : ThinkerOutputStruct = await self.LLMHandler.get_structured_response(
                     prompt=THINKER_PROMPT, 
                     output_structure=ThinkerOutputStruct,
-                    use_model="gemini",
-                    user_task = user_task,  
+                    use_model="google",
+                    user_task = user_task,
                 )
-            task = response.Task
-            thought = response.Thought
+            task,thought = response.Task, response.Thought
             
             if task:
                 state.tasks.append(
@@ -229,6 +140,11 @@ class AutoAgent:
                     )
                 )
                 state.messages.append(AIMessage(content= task))
+                state.routes["thinker"] = ["executor"]
+                state.route_config["thinker"] = RouteConfig(
+                    from_node="thinker",
+                    conditional_nodes=["executor"]
+                )
                 if self.verbose:
                     logger.info(f"Task for Execution:---> {task}")
                 
@@ -236,7 +152,11 @@ class AutoAgent:
                 # Update state with thinking results
                 state.thoughts.append(thought)
                 state.messages.append(AIMessage(content=thought))
-                state.routes.append()
+                state.routes["thinker"] = ["researcher"]
+                state.route_config["thinker"] = RouteConfig(
+                    from_node="thinker",
+                    conditional_nodes=["researcher"]
+                )
                 if self.verbose:
                     logger.info(f"Thinking result:---> {thought}")
                 
@@ -250,9 +170,6 @@ class AutoAgent:
             logger.error(error_msg)
             state.errors.append(error_msg)
             raise e
-        
-    def thinker_node_router(self, state: AutoAgentState):
-        next_node = state.next_nodes.get("thinker_node")
     
     async def researcher_node(self, state: AutoAgentState) -> AutoAgentState:
         """
@@ -265,77 +182,77 @@ class AutoAgent:
             Updated state with research results
         """
         logger.info("Starting research based on thoughts")
+        return state
+        # if not state.thoughts:
+        #     state.errors.append("No thoughts provided for research")
+        #     return state
         
-        if not state.thoughts:
-            state.errors.append("No thoughts provided for research")
-            return state
-        
-        try:
-            # Extract search queries from thoughts
-            system_prompt = """
-            Based on the following thought about a user query, extract specific search queries that would help find the most relevant information. 
-            Return ONLY the search queries as a JSON list of strings, with no additional text. Example:
-            ["startup funding applications 2025", "open startup funding forms"]
-            """
+        # try:
+        #     # Extract search queries from thoughts
+        #     system_prompt = """
+        #     Based on the following thought about a user query, extract specific search queries that would help find the most relevant information. 
+        #     Return ONLY the search queries as a JSON list of strings, with no additional text. Example:
+        #     ["startup funding applications 2025", "open startup funding forms"]
+        #     """
             
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Thought: {state.thoughts[-1]}"}
-            ]
+        #     messages = [
+        #         {"role": "system", "content": system_prompt},
+        #         {"role": "user", "content": f"Thought: {state.thoughts[-1]}"}
+        #     ]
             
-            response = await self.llm.ainvoke(messages)
-            search_queries_text = response.content
+        #     response = await self.llm.ainvoke(messages)
+        #     search_queries_text = response.content
             
-            # Extract the JSON part
-            try:
-                # Find the JSON array in the response
-                json_start = search_queries_text.find("[")
-                json_end = search_queries_text.rfind("]") + 1
+        #     # Extract the JSON part
+        #     try:
+        #         # Find the JSON array in the response
+        #         json_start = search_queries_text.find("[")
+        #         json_end = search_queries_text.rfind("]") + 1
                 
-                if json_start >= 0 and json_end > json_start:
-                    search_queries_json = search_queries_text[json_start:json_end]
-                    search_queries = json.loads(search_queries_json)
-                else:
-                    # Fallback: try to parse the entire response as JSON
-                    search_queries = json.loads(search_queries_text)
+        #         if json_start >= 0 and json_end > json_start:
+        #             search_queries_json = search_queries_text[json_start:json_end]
+        #             search_queries = json.loads(search_queries_json)
+        #         else:
+        #             # Fallback: try to parse the entire response as JSON
+        #             search_queries = json.loads(search_queries_text)
                 
-                if not isinstance(search_queries, list):
-                    search_queries = [str(search_queries)]
-            except json.JSONDecodeError:
-                # If JSON parsing fails, use a simple string splitting approach
-                search_queries = [q.strip(' "\'') for q in search_queries_text.split(',')]
+        #         if not isinstance(search_queries, list):
+        #             search_queries = [str(search_queries)]
+        #     except json.JSONDecodeError:
+        #         # If JSON parsing fails, use a simple string splitting approach
+        #         search_queries = [q.strip(' "\'') for q in search_queries_text.split(',')]
                 
-            # Execute the search for each query
-            all_results = []
-            for query in search_queries:
-                results = await self._execute_search(query)
-                all_results.extend(results)
+        #     # Execute the search for each query
+        #     all_results = []
+        #     for query in search_queries:
+        #         results = await self._execute_search(query)
+        #         all_results.extend(results)
             
-            # Remove duplicates based on URL
-            unique_results = []
-            seen_urls = set()
-            for result in all_results:
-                if result.url not in seen_urls:
-                    seen_urls.add(result.url)
-                    unique_results.append(result)
+        #     # Remove duplicates based on URL
+        #     unique_results = []
+        #     seen_urls = set()
+        #     for result in all_results:
+        #         if result.url not in seen_urls:
+        #             seen_urls.add(result.url)
+        #             unique_results.append(result)
             
-            # Sort by relevance score
-            unique_results.sort(key=lambda x: x.relevance_score, reverse=True)
+        #     # Sort by relevance score
+        #     unique_results.sort(key=lambda x: x.relevance_score, reverse=True)
             
-            # Limit to max_search_results
-            state.research_results = unique_results[:self.max_search_results]
+        #     # Limit to max_search_results
+        #     state.research_results = unique_results[:self.max_search_results]
             
-            # Log results if verbose
-            if self.verbose:
-                logger.info(f"Found {len(state.research_results)} unique research results")
+        #     # Log results if verbose
+        #     if self.verbose:
+        #         logger.info(f"Found {len(state.research_results)} unique research results")
             
-            return state
+        #     return state
             
-        except Exception as e:
-            error_msg = f"Error in researcher_node: {str(e)}"
-            logger.error(error_msg)
-            state.errors.append(error_msg)
-            return state
+        # except Exception as e:
+        #     error_msg = f"Error in researcher_node: {str(e)}"
+        #     logger.error(error_msg)
+        #     state.errors.append(error_msg)
+        #     return state
     
     async def _execute_search(self, query: str) -> List[ResearchResult]:
         """
@@ -623,77 +540,74 @@ class AutoAgent:
         """
         logger.info("Executing validated tasks")
         
-        if not state.tasks:
-            state.errors.append("No tasks to execute")
-            return state
         
-        try:
-            # Generate a summary of the tasks for execution
-            task_summary = "Task Summary:\n"
-            for idx, task in enumerate(state.tasks, 1):
-                task_summary += f"{idx}. {task.website} - {task.task_description} (Priority: {task.priority.value})\n"
+        # try:
+        #     # Generate a summary of the tasks for execution
+        #     task_summary = "Task Summary:\n"
+        #     for idx, task in enumerate(state.tasks, 1):
+        #         task_summary += f"{idx}. {task.website} - {task.task_description} (Priority: {task.priority.value})\n"
             
-            # This would be where your browser agent integration goes
-            # For this implementation, we'll just simulate the execution and results
+        #     # This would be where your browser agent integration goes
+        #     # For this implementation, we'll just simulate the execution and results
             
-            # Simulate execution results
-            execution_results = []
-            for task in state.tasks:
-                # This is a placeholder for the actual browser agent execution
-                # In a real implementation, you would call your browser agent here
-                execution_result = {
-                    "website": task.website,
-                    "task": task.task_description,
-                    "status": "simulated",  # In real implementation: "success", "failure", or "partial"
-                    "notes": f"This is a simulated execution for {task.website}",
-                }
+        #     # Simulate execution results
+        #     execution_results = []
+        #     for task in state.tasks:
+        #         # This is a placeholder for the actual browser agent execution
+        #         # In a real implementation, you would call your browser agent here
+        #         execution_result = {
+        #             "website": task.website,
+        #             "task": task.task_description,
+        #             "status": "simulated",  # In real implementation: "success", "failure", or "partial"
+        #             "notes": f"This is a simulated execution for {task.website}",
+        #         }
                 
-                execution_results.append(execution_result)
+        #         execution_results.append(execution_result)
             
-            # Update state with execution results
-            state.execution_results = execution_results
+        #     # Update state with execution results
+        #     state.execution_results = execution_results
             
-            # Generate final summary
-            system_prompt = """
-            Review the executed tasks and create a concise summary of what was accomplished.
-            Include:
-            1. Number of tasks successfully executed
-            2. Key information discovered or actions performed
-            3. Any issues encountered
+        #     # Generate final summary
+        #     system_prompt = """
+        #     Review the executed tasks and create a concise summary of what was accomplished.
+        #     Include:
+        #     1. Number of tasks successfully executed
+        #     2. Key information discovered or actions performed
+        #     3. Any issues encountered
             
-            Be clear and direct in your summary.
-            """
+        #     Be clear and direct in your summary.
+        #     """
             
-            execution_results_str = "\n".join([
-                f"Website: {result['website']}\nTask: {result['task']}\nStatus: {result['status']}\nNotes: {result['notes']}"
-                for result in execution_results
-            ])
+        #     execution_results_str = "\n".join([
+        #         f"Website: {result['website']}\nTask: {result['task']}\nStatus: {result['status']}\nNotes: {result['notes']}"
+        #         for result in execution_results
+        #     ])
             
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Original Query: {state.query}\n\nExecution Results:\n{execution_results_str}"}
-            ]
+        #     messages = [
+        #         {"role": "system", "content": system_prompt},
+        #         {"role": "user", "content": f"Original Query: {state.query}\n\nExecution Results:\n{execution_results_str}"}
+        #     ]
             
-            response = await self.llm.ainvoke(messages)
-            summary = response.content
+        #     response = await self.llm.ainvoke(messages)
+        #     summary = response.content
             
-            # Add summary to messages
-            state.messages.append(AIMessage(content=summary))
+        #     # Add summary to messages
+        #     state.messages.append(AIMessage(content=summary))
             
-            # Log results if verbose
-            if self.verbose:
-                logger.info(f"Executed {len(state.execution_results)} tasks")
-                logger.info(f"Summary: {summary}")
+        #     # Log results if verbose
+        #     if self.verbose:
+        #         logger.info(f"Executed {len(state.execution_results)} tasks")
+        #         logger.info(f"Summary: {summary}")
             
-            return state
+        #     return state
             
-        except Exception as e:
-            error_msg = f"Error in executor_node: {str(e)}"
-            logger.error(error_msg)
-            state.errors.append(error_msg)
-            return state
+        # except Exception as e:
+        #     error_msg = f"Error in executor_node: {str(e)}"
+        #     logger.error(error_msg)
+        #     state.errors.append(error_msg)
+        #     return state
     
-    async def run(self, query: str) -> Dict[str, Any]:
+    async def run(self, user_task: str) -> Dict[str, Any]:
         """
         Run the agent on a given query.
         
@@ -706,8 +620,8 @@ class AutoAgent:
         try:
             # Prepare initial state
             initial_state = AutoAgentState(
-                query=query,
-                messages=[HumanMessage(content=query)]
+                user_task=user_task,
+                messages=[HumanMessage(content=user_task)]
             )
             
             # Run the workflow
@@ -717,22 +631,24 @@ class AutoAgent:
             except Exception as e:
                 raise e
             # Format and return results
-            return {
-                "query": query,
-                "messages": [{"role": msg.type, "content": msg.content} for msg in final_state.messages],
-                "research_results": [result.dict() for result in final_state.research_results],
-                "tasks": [task.dict() for task in final_state.tasks],
-                "execution_results": final_state.execution_results,
-                "errors": final_state.errors
-            }
-            
+            # return {
+            #     "query": user_task,
+            #     # "messages": [{"role": msg.type, "content": msg.content} for msg in final_state.messages],
+            #     # "research_results": [result.dict() for result in final_state.research_results],
+            #     "tasks": [task.dict() for task in final_state.tasks],
+            #     # "execution_results": final_state.execution_results,
+            #     "errors": final_state.errors
+            # }
+            return final_state
+        
         except Exception as e:
             logger.error(f"Error running agent: {str(e)}")
-            return {
-                "query": query,
-                "error": str(e),
-                "status": "failed"
-            }
+            raise e 
+            # return {
+            #     "query": user_task,
+            #     "error": str(e),
+            #     "status": "failed"
+            # }
     
     async def close(self):
         """Close any open resources."""

@@ -69,7 +69,7 @@ class StructuredLLMHandler:
         """
         # self._validate_llm_dict(llm_dict)
         self._llm_dict = llm_dict
-        self._main_llm ,self._fallback_llm = self._set_llm(llm_dict, fallback_llm)
+        self._main_llm , self._fallback_llm = self._set_llm(llm_dict, fallback_llm)
         self._cache_ttl = cache_ttl
         self._max_retries = max_retries
         self._retry_delay = retry_delay
@@ -256,7 +256,7 @@ class StructuredLLMHandler:
         
         # Format the prompt
         formatted_prompt = await self._format_prompt(prompt, output_structure, **kwargs)
-        
+        main_model = self._llm_dict[use_model] if use_model else self._main_llm
         # # Check cache if enabled
         # if use_cache:
         #     cache_key = self._get_cache_key(formatted_prompt, output_structure)
@@ -271,7 +271,7 @@ class StructuredLLMHandler:
         for attempt in range(1, retry_attempts + 1):
             LOGGER.info(f"Attempt {attempt}/{retry_attempts} with main LLM")
             status, response = await self._handle_llm_response(
-                self._llm_dict[use_model] or self._main_llm,
+                main_model,
                 formatted_prompt,
                 output_structure
             )
