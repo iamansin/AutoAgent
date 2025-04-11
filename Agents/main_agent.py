@@ -7,12 +7,12 @@ from typing import Awaitable, Dict, List, Any, Optional, Tuple, Union, Callable
 import httpx
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import StateGraph, END
+from langgraph.types import interrupt
 # from langgraph.prebuilt import ToolNode
 # from langgraph.graph.message import add_messages
 from langgraph.graph.graph import CompiledGraph
 from langchain_core.messages import HumanMessage, AIMessage
 # from langchain_openai import ChatOpenAI
-
 from pydantic import BaseModel, Field
 from .prompts import THINKER_PROMPT
 from Utils.structured_llm import StructuredLLMHandler
@@ -23,6 +23,7 @@ from Utils.schemas import (
     ThinkerOutputStruct,
     ResearchResult
 )
+from .Browser_Agent import BrowserAgentHandler
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("AutoAgent")
@@ -39,6 +40,7 @@ class AutoAgentState(BaseModel):
     errors: List[str] = Field(default_factory=list)
     send_list : Dict[str, List[InternalState]] = Field(default_factory=dict)
     messages: List[Union[HumanMessage, AIMessage]] = Field(default_factory=list)
+    results : Dict[str,Any] = Field(default_factory=dict)
 
 class AutoAgent:
     """
@@ -82,7 +84,7 @@ class AutoAgent:
         self._Router :Router = Router(name = "autoagent")
         # Initialize HTTP client for API calls
         self.http_client = httpx.AsyncClient(timeout=timeout)
-        
+        self.BrowserAgent = BrowserAgentHandler()
         # Set up the workflow graph
         self.workflow :CompiledGraph = self._build_workflow()
         
@@ -540,72 +542,28 @@ class AutoAgent:
         """
         logger.info("Executing validated tasks")
         
+        # if self.queue_mech.activated:
+        #     pass
+        if self.BrowserAgent.has_pending_input_requests(context_id):
+                                # Use LangGraph's interrupt to get user input
+                    # Provide the input to the browser agent
+            await handler.provide_user_input(context_id, user_input)
         
-        # try:
-        #     # Generate a summary of the tasks for execution
-        #     task_summary = "Task Summary:\n"
-        #     for idx, task in enumerate(state.tasks, 1):
-        #         task_summary += f"{idx}. {task.website} - {task.task_description} (Priority: {task.priority.value})\n"
-            
-        #     # This would be where your browser agent integration goes
-        #     # For this implementation, we'll just simulate the execution and results
-            
-        #     # Simulate execution results
-        #     execution_results = []
-        #     for task in state.tasks:
-        #         # This is a placeholder for the actual browser agent execution
-        #         # In a real implementation, you would call your browser agent here
-        #         execution_result = {
-        #             "website": task.website,
-        #             "task": task.task_description,
-        #             "status": "simulated",  # In real implementation: "success", "failure", or "partial"
-        #             "notes": f"This is a simulated execution for {task.website}",
-        #         }
+        else:
+            task =  state.tasks[-1].task_description
+            try:
+                context_id = state["context_id"]
                 
-        #         execution_results.append(execution_result)
-            
-        #     # Update state with execution results
-        #     state.execution_results = execution_results
-            
-        #     # Generate final summary
-        #     system_prompt = """
-        #     Review the executed tasks and create a concise summary of what was accomplished.
-        #     Include:
-        #     1. Number of tasks successfully executed
-        #     2. Key information discovered or actions performed
-        #     3. Any issues encountered
-            
-        #     Be clear and direct in your summary.
-        #     """
-            
-        #     execution_results_str = "\n".join([
-        #         f"Website: {result['website']}\nTask: {result['task']}\nStatus: {result['status']}\nNotes: {result['notes']}"
-        #         for result in execution_results
-        #     ])
-            
-        #     messages = [
-        #         {"role": "system", "content": system_prompt},
-        #         {"role": "user", "content": f"Original Query: {state.query}\n\nExecution Results:\n{execution_results_str}"}
-        #     ]
-            
-        #     response = await self.llm.ainvoke(messages)
-        #     summary = response.content
-            
-        #     # Add summary to messages
-        #     state.messages.append(AIMessage(content=summary))
-            
-        #     # Log results if verbose
-        #     if self.verbose:
-        #         logger.info(f"Executed {len(state.execution_results)} tasks")
-        #         logger.info(f"Summary: {summary}")
-            
-        #     return state
-            
-        # except Exception as e:
-        #     error_msg = f"Error in executor_node: {str(e)}"
-        #     logger.error(error_msg)
-        #     state.errors.append(error_msg)
-        #     return state
+                # Check if browser agent is waiting for input
+                
+
+                
+                return state
+            except Exception as e:
+                error_msg = f"Error in executor_node: {str(e)}"
+                logger.error(error_msg)
+                state.errors.append(error_msg)
+                return state
     
     async def run(self, user_task: str) -> Dict[str, Any]:
         """

@@ -1,84 +1,154 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from browser_use import Agent, Browser, BrowserConfig
-from browser_use.browser.context import BrowserContextConfig, BrowserContext
 import os
-from dotenv import load_dotenv
+import sys
 import asyncio
+import logging
+from dotenv import load_dotenv
+
+from langchain_google_genai import ChatGoogleGenerativeAI
+from browser_use import Agent, Browser, BrowserConfig, Controller, ActionResult
+from browser_use.browser.context import BrowserContextConfig, BrowserContext
 from Agents import custom_controllers
-from Agents.custom_controllers.base_controller import ControllerRegistry
-from Agents.custom_controllers.ScreenShot_controller import TakeScreenshotParams, take_screenshot
 from Agents.prompts import MySystemPrompt
 from Utils.CustomBrowser import ExtendedBrowser
 from Utils.CustomBrowserContext import ExtendedBrowserContext
+from Agents.custom_controllers.Interrup_controller import get_human_in_loop, HumanInput
+from Agents.custom_controllers.base_controller import ControllerRegistry
+# Configure basic logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-import logging
-# print(GOOGLE_API_KEY)
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash-001",
     temperature=0,
-    api_key= GOOGLE_API_KEY,
+    api_key=GOOGLE_API_KEY,
     timeout=None,
     max_retries=2,
 )
 
-browser_config = BrowserConfig(headless=False)
+browser_config = BrowserConfig(headless=False,
+                               disable_security=True)
 
 context_config = BrowserContextConfig(
     cookies_file="./browser-data/Cookies/cookies.json",
     wait_for_network_idle_page_load_time=3.0,
-    browser_window_size={'width': 1280, 'height': 1100},
+    browser_window_size={'width': 900, 'height': 750},
     locale='en-US',
     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
     highlight_elements=True,
     viewport_expansion=500,
 )
 
+# Create Browser and Context objects
 browser = Browser(config=browser_config)
 context = ExtendedBrowserContext(
     browser=browser, 
     config=context_config,
     screenshot_dir="agent_screenshots",  # Explicit directory
-    capture_events=True,
-    debug_level=logging.DEBUG  # For more verbose logging while debugging
+    screenshot_interval=2.5,             # Take a screenshot every 1.5 seconds
+    transmit=False, 
+    debug_level=logging.WARNING  # For more verbose logging while debugging
 )
 
-# Initialize the context BEFORE creating the agent
- 
 
-# base_controller = ControllerRegistry()
-# base_controller.register_action(name = "screenshot_action",
-#                                 description="This function is for taking screen shots",
-#                                 param_model=TakeScreenshotParams,
-#                                 handler=take_screenshot)
-# custom_controller = base_controller.get_controller()
+# registry = ControllerRegistry()
+# registry.register_action(name = "human_in_loop",
+#                                   description="This tool is for taking input from the user, you must provide question to ask the user.",
+#                                   param_model=HumanInput,
+#                                   handler=get_human_in_loop
+#                                   )
 
+# custom_controller = registry.get_controller()
+custom_controller = Controller()
 
-async def run_search(_task :str):
-    await context.initialize() 
-    agent = Agent(
-		browser_context=context,
-		task=_task,
-        # controller=custom_controller,
-        system_prompt_class=MySystemPrompt,
-		llm=llm)
+@custom_controller.action('Ask user for information')
+def ask_human(question: str) -> str:
+    """Use this tool when you want to ask something to the use Or,
+    If you do not have some infromation that you want to ask the user."""
+    answer = input(f'\n{question}\nInput: ')
+    return ActionResult(extracted_content=answer)
+
+async def run_search(task1: str):
+    try:
+        # Initialize context
+        await context.initialize()
+        
+        # Create and run first agent
+        agent1 = Agent(
+            browser_context=context,
+            controller=custom_controller,
+            planner_llm=llm,
+            task=task1,
+            system_prompt_class=MySystemPrompt,
+            llm=llm
+        )
+        
+        logger.info("Running first task...")
+        history1 = await agent1.run()
+        
+        # # Create and run second agent
+        # logger.info("Running second task...")
+        # agent2 = Agent(
+        #     browser_context=context,
+        #     task=task2,
+        #     system_prompt_class=MySystemPrompt,
+        #     llm=llm
+        # )
+        
+        # history2 = await agent2.run()
+        
+        # Process results
+        errors1 = history1.errors()
+        # errors2 = history2.errors()
+        
+        logger.info("Tasks completed")
+        return errors1
+        
+    except Exception as e:
+        logger.error(f"Error during task execution: {str(e)}")
+        raise
+    finally:
+        try:
+            # Ensure context and browser cleanup
+            await context.close()
+            await browser.close()
+        except Exception as cleanup_error:
+            logger.error(f"Error during cleanup: {str(cleanup_error)}")
+
+def main():
+    # On Windows, set the event loop policy to ProactorEventLoopPolicy which supports subprocesses
+    if sys.platform.startswith('win'):
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     
     try:
-        history = await agent.run()
-        print(history.errors())
-        await context.close()
+        # Get user inputs
+        task1 = input("Input Task 1: ").strip()
+        # task2 = input("Input Task 2: ").strip()
+        
+        # if not task1 or not task2:
+        #     raise ValueError("Tasks cannot be empty")
+        
+        # Create new event loop and run tasks
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        errors1= loop.run_until_complete(run_search(task1))
+        
+        # Print results
+        print("Results from Task 1:", errors1)
+        # print("Results from Task 2:", errors2)
+        
+    except KeyboardInterrupt:
+        logger.info("Application terminated by user")
     except Exception as e:
-        await context.close()
-        raise e
-    # await context.close()
-    
- 
-def main():
-    task = input("Input Task : ")
-    if not isinstance(task,str):
-        task = str(task)
-    asyncio.run(run_search(task))
-    
+        logger.error(f"Application error: {str(e)}")
+    finally:
+        try:
+            loop.close()
+        except Exception as loop_close_error:
+            logger.error(f"Error closing event loop: {str(loop_close_error)}")
 
-main()
+if __name__ == "__main__":
+    main()

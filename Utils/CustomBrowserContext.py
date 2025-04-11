@@ -3,20 +3,20 @@ import os
 import logging
 import asyncio
 from typing import Optional, Dict, Any
+import base64
 
 from browser_use.browser.context import BrowserContext, BrowserContextConfig, BrowserContextState
 from playwright.async_api import ElementHandle, Page
 
-# Set up detailed logging
+# Set up logging
 logger = logging.getLogger(__name__)
 
 class ExtendedBrowserContext(BrowserContext):
     """
-    A class that extends BrowserContext to add automatic screenshot capabilities.
-    Inherits all base functionality while adding screenshot features.
+    A simplified class that extends BrowserContext to take screenshots at regular intervals.
+    Includes improved error handling for timeout issues.
     
-    Last Updated: 2025-04-10 01:25:10 UTC
-    Author: iamansin
+    Last Updated: 2025-04-11
     """
     
     def __init__(
@@ -25,38 +25,54 @@ class ExtendedBrowserContext(BrowserContext):
         config: BrowserContextConfig | None = None,
         state: Optional[BrowserContextState] = None,
         screenshot_dir: Optional[str] = "screenshot-dir",
-        capture_events: bool = False,
-        debug_level: int = logging.INFO
+        debug_level: int = logging.INFO,
+        screenshot_interval: float = 1.0,  # Time between screenshots in seconds
+        transmit: bool = False,  # Whether to transmit via Socket.IO instead of saving
+        socketio_client = None,  # Socket.IO client instance
+        max_retries: int = 3,  # Maximum screenshot retries
+        screenshot_timeout: int = 10000  # Screenshot timeout in ms
     ):
         """
-        Initialize ExtendedBrowserContext with additional screenshot capabilities.
+        Initialize ExtendedBrowserContext with time-based screenshot capabilities.
         
         Args:
             browser: The browser instance
             config: Browser context configuration
             state: Browser context state
-            screenshot_dir: Directory to store screenshots
-            capture_events: Whether to enable automatic event capturing
+            screenshot_dir: Directory to store screenshots (used only if transmit=False)
             debug_level: Logging level for screenshot operations
+            screenshot_interval: Time between screenshots in seconds
+            transmit: Whether to transmit screenshots via Socket.IO instead of saving to disk
+            socketio_client: Socket.IO client instance (required if transmit=True)
+            max_retries: Maximum number of retries for failed screenshots
+            screenshot_timeout: Timeout for screenshot operations in milliseconds
         """
-        # Set up logging for this instance
+        # Set up logging
         self._setup_logging(debug_level)
         
-        logger.info("Initializing ExtendedBrowserContext")
+        logger.info("Initializing ExtendedBrowserContext with timeout handling")
 
         # Initialize parent BrowserContext
         super().__init__(browser, config, state)
         
-        # Initialize screenshot-specific attributes
+        # Initialize screenshot settings
         self.screenshot_dir = screenshot_dir
-        self.capture_events = capture_events
+        self.screenshot_interval = screenshot_interval
+        self.transmit = transmit
+        self.socketio_client = socketio_client
         self._screenshot_count = 0
-        self._listeners_initialized = False
         self.session = None  # Will be initialized in initialize()
+        self._screenshot_task = None
+        self.max_retries = max_retries
+        self.screenshot_timeout = screenshot_timeout
+        self._last_error_time = None
+        self._consecutive_errors = 0
 
-        logger.info(f"Screenshot settings - Directory: {screenshot_dir}, Capture events: {capture_events}")
-
-        if screenshot_dir:
+        # Validate configuration
+        if self.transmit and not self.socketio_client:
+            logger.warning("Transmit mode enabled but no Socket.IO client provided!")
+        
+        if not self.transmit and screenshot_dir:
             # Create screenshot directory if it doesn't exist
             try:
                 os.makedirs(screenshot_dir, exist_ok=True)
@@ -77,264 +93,277 @@ class ExtendedBrowserContext(BrowserContext):
         logger.info("Logger configured for ExtendedBrowserContext")
     
     async def initialize(self):
-        """Initialize the context and set up event listeners"""
+        """Initialize the context and start screenshot timer"""
         logger.info("Beginning context initialization")
         
         try:
-            # Call parent initialization to set up session
-            await self._initialize_session()
-            logger.info("Parent context initialization completed")
+            # Call parent initialization
+            await super()._initialize_session()
+            logger.info("Browser context initialization completed")
             
-            # Setup event listeners if not already done
-            if self.capture_events and not self._listeners_initialized:
-                await self._setup_event_listeners()
+            # Start the screenshot timer
+            await self._start_screenshot_timer()
             
             logger.info("Context initialization completed successfully")
         except Exception as e:
             logger.error(f"❌ Context initialization failed: {str(e)}")
             raise
+    
+    
+    async def _start_screenshot_timer(self):
+        """Start the timer to take screenshots at regular intervals"""
+        logger.info(f"Starting screenshot timer with interval: {self.screenshot_interval}s")
         
-    async def _setup_event_listeners(self):
-        """Set up event listeners for automatic screenshots"""
-        logger.info("Setting up page event listeners")
+        # Cancel existing task if it exists
+        if self._screenshot_task and not self._screenshot_task.done():
+            self._screenshot_task.cancel()
         
+        # Create new periodic screenshot task
+        self._screenshot_task = asyncio.create_task(self._periodic_screenshot())
+    
+    async def _periodic_screenshot(self):
+        """Take screenshots at regular intervals with adaptive error handling"""
         try:
-            # Initialize session if not already done
-            if not self.session:
-                await self._initialize_session()
+            while True:
+                # Check if we should adjust interval due to errors
+                adjusted_interval = self._get_adjusted_interval()
                 
-            if not self.session or not self.session.context:
-                logger.warning("Context not available for event listeners setup")
-                return
-            
-            # Add listeners to all pages
-            for page in self.session.context.pages:
-                logger.info(f"Adding event listeners to page: {page.url}")
+                # Take screenshot
+                await self._take_screenshot()
                 
-                # Define event handlers
-                async def on_load():
-                    logger.debug("Page load event detected")
-                    await self._capture_event_screenshot("page_load")
+                # If successful, reset error counter
+                self._consecutive_errors = 0
                 
-                async def on_dom_content_loaded():
-                    logger.debug("DOM content loaded event detected")
-                    await self._capture_event_screenshot("dom_content_loaded")
+                # Wait for next interval
+                await asyncio.sleep(adjusted_interval)
                 
-                async def on_popup(popup):
-                    logger.debug("Popup detected")
-                    await self._capture_event_screenshot("popup_opened")
-                
-                async def on_dialog(dialog):
-                    logger.debug(f"Dialog detected: {dialog.type}")
-                    await self._capture_event_screenshot(f"dialog_{dialog.type}")
-                
-                async def on_console(msg):
-                    if msg.type == "error":
-                        logger.debug("Console error detected")
-                        await self._capture_event_screenshot("console_error")
-                
-                async def on_pageerror(error):
-                    logger.debug("Page error detected")
-                    await self._capture_event_screenshot("page_error")
-                
-                async def on_request(request):
-                    if request.resource_type == "document":
-                        logger.debug(f"Main document request: {request.url}")
-                        await self._capture_event_screenshot("page_request")
-                
-                async def on_response(response):
-                    if response.request.resource_type == "document":
-                        logger.debug(f"Main document response: {response.url}, status: {response.status}")
-                        if response.status >= 400:
-                            await self._capture_event_screenshot(f"error_response_{response.status}")
-                
-                # Add all event listeners
-                page.on("load", lambda: asyncio.ensure_future(on_load()))
-                page.on("domcontentloaded", lambda: asyncio.ensure_future(on_dom_content_loaded()))
-                page.on("popup", lambda popup: asyncio.ensure_future(on_popup(popup)))
-                page.on("dialog", lambda dialog: asyncio.ensure_future(on_dialog(dialog)))
-                page.on("console", lambda msg: asyncio.ensure_future(on_console(msg)))
-                page.on("pageerror", lambda error: asyncio.ensure_future(on_pageerror(error)))
-                page.on("request", lambda req: asyncio.ensure_future(on_request(req)))
-                page.on("response", lambda res: asyncio.ensure_future(on_response(res)))
-                
-            self._listeners_initialized = True
-            logger.info("Event listeners setup completed")
+        except asyncio.CancelledError:
+            logger.info("Screenshot timer cancelled")
         except Exception as e:
-            logger.error(f"❌ Failed to set up event listeners: {str(e)}")
-
-    async def capture_screenshot(self, name: str, full_page: bool = False, element: Optional[ElementHandle] = None) -> Optional[str]:
-        """
-        Capture a screenshot and save it to the screenshot directory.
+            logger.error(f"❌ Error in screenshot timer: {str(e)}")
+            # Restart timer after a delay
+            await asyncio.sleep(5)
+            self._screenshot_task = asyncio.create_task(self._periodic_screenshot())
+    
+    def _get_adjusted_interval(self):
+        """Get adjusted interval based on error history (implements backoff)"""
+        if self._consecutive_errors == 0:
+            return self.screenshot_interval
         
-        Args:
-            name: Base name for the screenshot file
-            full_page: Whether to capture the full page or just viewport (default: False = viewport only)
-            element: Optional element to highlight in the screenshot
+        # Add backoff factor based on consecutive errors (max 5x normal interval)
+        backoff_factor = min(self._consecutive_errors, 5)
+        return self.screenshot_interval * backoff_factor
+    
+    async def _is_page_stable(self, page):
+        """Check if the page is in a stable state for screenshots"""
+        try:
+            # Check network activity
+            is_stable = await page.evaluate("""() => {
+                // Check if page is still loading
+                if (document.readyState !== 'complete') return false;
+                
+                // Check if there are pending network requests
+                const performance = window.performance;
+                if (!performance || !performance.getEntriesByType) return true;
+                
+                const resources = performance.getEntriesByType('resource');
+                const incomplete = resources.filter(r => !r.responseEnd);
+                return incomplete.length === 0;
+            }""")
             
-        Returns:
-            Path to the saved screenshot file or None if failed
-        """
-        logger.info(f"Capture screenshot requested: {name} (full_page: {full_page})")
-        
-        if not self.screenshot_dir:
-            logger.warning("Screenshot directory not specified, skipping screenshot")
-            return None
-
+            return is_stable
+        except Exception:
+            # If we can't determine, assume it's stable
+            return True
+    
+    async def _take_screenshot(self):
+        """Take a screenshot and either save it or transmit it"""
         try:
             # Get the current page
             page = await super().get_current_page()
             if not page:
-                logger.error("Cannot capture screenshot: No active page available")
-                return None
+                logger.warning("Cannot take screenshot: No active page available")
+                return
             
-            # Generate unique filename with timestamp and counter
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-            self._screenshot_count += 1
-            filename = f"{name}_{timestamp}_{self._screenshot_count:03d}.png"
-            filepath = os.path.join(self.screenshot_dir, filename)
+            # Check if page is in a reasonable state for screenshots
+            is_stable = await self._is_page_stable(page)
+            if not is_stable:
+                logger.debug("Skipping screenshot: Page is still loading")
+                return
             
-            logger.debug(f"Screenshot will be saved to: {filepath}")
+            # Take screenshot
+            if self.transmit:
+                # For transmitting, capture to memory
+                success = await self._capture_and_transmit_screenshot(page)
+                if success:
+                    logger.info(f"📡 Screenshot #{self._screenshot_count} transmitted")
+            else:
+                # For saving, capture to file
+                filepath = await self._save_screenshot(page)
+                if filepath:
+                    logger.info(f"📸 Screenshot saved to: {filepath}")
+        except Exception as e:
+            logger.error(f"❌ Screenshot error: {str(e)}")
+            self._consecutive_errors += 1
+            self._last_error_time = datetime.utcnow()
+    
+    async def _save_screenshot(self, page):
+        """Save screenshot to disk with optimized parameters and retry logic"""
+        if not self.screenshot_dir:
+            return None
+        
+        # Generate filename with timestamp
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        self._screenshot_count += 1
+        filename = f"screenshot_{timestamp}_{self._screenshot_count:03d}.png"
+        filepath = os.path.join(self.screenshot_dir, filename)
+        
+        # Try different screenshot strategies with retry
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                # Adjust parameters based on retry attempt
+                if attempt == 1:
+                    # First try with standard parameters
+                    logger.debug("Taking screenshot with standard parameters")
+                    await page.screenshot(
+                        path=filepath,
+                        timeout=self.screenshot_timeout,
+                        animations="disabled"
+                    )
+                elif attempt == 2:
+                    # Second try with reduced quality/options
+                    logger.debug("Taking screenshot with reduced parameters")
+                    await page.screenshot(
+                        path=filepath,
+                        timeout=int(self.screenshot_timeout * 0.7),  # Reduce timeout
+                        animations="disabled",
+                        type="jpeg",
+                        quality=80
+                    )
+                else:
+                    # Final try with minimal options
+                    logger.debug("Taking screenshot with minimal parameters")
+                    minimal_path = filepath.replace(".png", "_minimal.jpg")
+                    await page.screenshot(
+                        path=minimal_path,
+                        timeout=5000,  # Very short timeout
+                        type="jpeg",
+                        quality=60,
+                        animations="disabled"
+                    )
+                    if os.path.exists(minimal_path):
+                        return minimal_path
+                
+                # Check if screenshot was saved successfully
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                    logger.debug(f"Screenshot successful on attempt {attempt}")
+                    return filepath
+                else:
+                    logger.warning(f"Screenshot file empty or missing (attempt {attempt})")
             
-            # Handle element highlighting
-            highlighted = False
-            original_styles = {}
-            
-            if element:
-                try:
-                    # Store original styles and apply highlighting
-                    original_styles = await element.evaluate("""el => {
-                        return {
-                            outline: el.style.outline,
-                            boxShadow: el.style.boxShadow,
-                            backgroundColor: el.style.backgroundColor
-                        };
-                    }""")
+            except Exception as e:
+                error_type = type(e).__name__
+                logger.warning(f"Screenshot attempt {attempt} failed: {error_type}: {str(e)}")
+                
+                # Short delay between retries
+                if attempt < self.max_retries:
+                    delay = attempt * 0.5  # Increasing delay with each retry
+                    await asyncio.sleep(delay)
+        
+        # If we got here, all attempts failed
+        logger.error("All screenshot attempts failed")
+        return None
+    
+    async def _capture_and_transmit_screenshot(self, page):
+        """Capture screenshot to memory and transmit via Socket.IO with retry logic"""
+        if not self.socketio_client:
+            logger.warning("Cannot transmit: No Socket.IO client available")
+            return False
+        
+        # Try different screenshot strategies with retry
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                # Adjust parameters based on retry attempt
+                if attempt == 1:
+                    # First try with standard parameters
+                    screenshot_bytes = await page.screenshot(
+                        timeout=self.screenshot_timeout,
+                        animations="disabled"
+                    )
+                elif attempt == 2:
+                    # Second try with reduced quality/options
+                    screenshot_bytes = await page.screenshot(
+                        timeout=int(self.screenshot_timeout * 0.7),
+                        animations="disabled",
+                        type="jpeg",
+                        quality=80
+                    )
+                else:
+                    # Final try with minimal options
+                    screenshot_bytes = await page.screenshot(
+                        timeout=5000,
+                        type="jpeg",
+                        quality=60,
+                        animations="disabled"
+                    )
+                
+                # If we got bytes, transmit them
+                if screenshot_bytes and len(screenshot_bytes) > 0:
+                    # Convert bytes to base64 for transmission
+                    encoded = base64.b64encode(screenshot_bytes).decode('utf-8')
                     
-                    await element.evaluate("""el => {
-                        el.style.outline = '2px solid red';
-                        el.style.boxShadow = '0 0 10px rgba(255,0,0,0.5)';
-                        el.style.backgroundColor = 'rgba(255,0,0,0.1)';
-                    }""")
-                    highlighted = True
-                    logger.debug("Element highlighted for screenshot")
-                except Exception as e:
-                    logger.warning(f"Failed to highlight element: {str(e)}")
-
-            # Take screenshot with retry logic
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    screenshot_options: Dict[str, Any] = {
-                        "path": filepath,
-                        "animations": "disabled",
+                    # Get page URL for metadata
+                    page_url = page.url
+                    
+                    # Create timestamp
+                    timestamp = datetime.utcnow().isoformat()
+                    
+                    # Prepare data packet
+                    self._screenshot_count += 1
+                    data = {
+                        'image': encoded,
+                        'timestamp': timestamp,
+                        'url': page_url,
+                        'count': self._screenshot_count,
+                        'attempt': attempt
                     }
                     
-                    # Only set full_page to True if explicitly requested
-                    if full_page:
-                        screenshot_options["full_page"] = True
-                    
-                    await page.screenshot(**screenshot_options)
-                    
-                    if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                        logger.info(f"📸 Screenshot captured successfully: {filepath}")
-                        break
-                    else:
-                        logger.warning(f"Screenshot file missing or empty (attempt {attempt}/{max_attempts})")
-                        if attempt == max_attempts:
-                            return None
-                except Exception as e:
-                    logger.warning(f"Screenshot attempt {attempt} failed: {str(e)}")
-                    if attempt == max_attempts:
-                        return None
-                    await asyncio.sleep(0.5)
-
-            # Restore original element styles
-            if highlighted and element:
-                try:
-                    await element.evaluate("""(el, styles) => {
-                        el.style.outline = styles.outline;
-                        el.style.boxShadow = styles.boxShadow;
-                        el.style.backgroundColor = styles.backgroundColor;
-                    }""", original_styles)
-                    logger.debug("Element styles restored after screenshot")
-                except Exception as e:
-                    logger.warning(f"Failed to restore element styles: {str(e)}")
-
-            return filepath
-
-        except Exception as e:
-            logger.error(f"❌ Failed to capture screenshot '{name}': {str(e)}")
-            return None
-
-    async def _capture_event_screenshot(self, event_name: str, element: Optional[ElementHandle] = None):
-        """Internal method to capture event-specific screenshots."""
-        logger.debug(f"Event triggered: {event_name}")
-        
-        if not self.capture_events:
-            logger.debug(f"Event screenshot skipped (capture_events disabled): {event_name}")
-            return
+                    # Transmit via Socket.IO
+                    self.socketio_client.emit('screenshot', data)
+                    logger.debug(f"Screenshot transmitted on attempt {attempt}")
+                    return True
             
-        if not self.screenshot_dir:
-            logger.debug(f"Event screenshot skipped (no directory): {event_name}")
-            return
+            except Exception as e:
+                error_type = type(e).__name__
+                logger.warning(f"Screenshot transmission attempt {attempt} failed: {error_type}: {str(e)}")
+                
+                # Short delay between retries
+                if attempt < self.max_retries:
+                    delay = attempt * 0.5  # Increasing delay with each retry
+                    await asyncio.sleep(delay)
         
-        try:
-            # Use default viewport-only screenshot for events
-            filepath = await self.capture_screenshot(f"event_{event_name}", full_page=False, element=element)
-            if filepath:
-                logger.debug(f"Event screenshot captured: {event_name} -> {filepath}")
-            else:
-                logger.warning(f"Event screenshot failed: {event_name}")
-        except Exception as e:
-            logger.error(f"❌ Event screenshot error for '{event_name}': {str(e)}")
-
-    # Override parent class methods to add screenshot capabilities
+        # If we got here, all attempts failed
+        logger.error("All screenshot transmission attempts failed")
+        return False
     
-    # async def navigate_to(self, url: str, max_retries: int = 3):
-    #     """Enhanced navigation with automatic screenshot capture, extended timeout, and retries."""
-    #     logger.info(f"Navigating to URL: {url}")
+    async def stop(self):
+        """Stop the screenshot timer and clean up"""
+        logger.info("Stopping screenshot timer")
         
-    #     if self.capture_events:
-    #         await self._capture_event_screenshot("pre_navigation")
+        # Cancel screenshot task
+        if self._screenshot_task and not self._screenshot_task.done():
+            self._screenshot_task.cancel()
+            try:
+                await self._screenshot_task
+            except asyncio.CancelledError as e:
+                print(f"There was some error while closing the BrowserContext : {str(e)}")
+                pass
+            
+        # Call parent cleanup
+        await super().close()
         
-    #     retry_count = 0
-    #     last_error = None
-        
-    #     while retry_count < max_retries:
-    #         try:
-    #             # Get the current page
-    #             page = await self.get_current_page()
-                
-    #             # Configure navigation options
-    #             navigation_options = {
-    #                 'timeout': 60000,  # 60 seconds timeout
-    #                 'wait_until': 'networkidle',
-    #                 'referer': ''
-    #             }
-                
-    #             # Perform navigation
-    #             await page.goto(url, **navigation_options)
-    #             logger.info(f"Navigation completed: {url}")
-                
-    #             if self.capture_events:
-    #                 await asyncio.sleep(0.5)
-    #                 await self._capture_event_screenshot("post_navigation")
-                
-    #             return  # Success, exit the function
-                
-    #         except Exception as e:
-    #             last_error = e
-    #             retry_count += 1
-    #             logger.warning(f"Navigation attempt {retry_count} failed: {str(e)}")
-                
-    #             if retry_count < max_retries:
-    #                 # Wait before retrying, using exponential backoff
-    #                 await asyncio.sleep(2 ** retry_count)
-                
-    #             if self.capture_events:
-    #                 await self._capture_event_screenshot(f"navigation_error_attempt_{retry_count}")
-        
-    #     # If we get here, all retries failed
-    #     logger.error(f"❌ Navigation failed after {max_retries} attempts: {str(last_error)}")
-    #     raise last_error
+        logger.info("Screenshot timer stopped")
+    
+    async def close(self):
+        """Override to ensure screenshot timer is stopped during cleanup"""
+        await self.stop()

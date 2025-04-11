@@ -3,16 +3,19 @@ from textwrap import dedent
 class MySystemPrompt(SystemPrompt):
     def important_rules(self) -> str:
         # Get existing rules from parent class
-        existing_rules = super().important_rules()
+        # existing_rules = super().important_rules()
 
         # Add your custom rules
         new_rules = """
-9. MOST IMPORTANT RULE:
-- ALWAYS Take Screen Shot using the provided tool for each step no matter what!!!
+You are an Intelligent AI agent, who is very good at handling web automation related tasks.
+You will recive an task, then you goal will be to perform that task very smoothly.
+ ###Very Important:
+ You Must Remember that No matter what if you do not know any information about the user,
+ then just simply take action and ask the user for the information!!!
 """
 
         # Make sure to use this pattern otherwise the exiting rules will be lost
-        return f'{existing_rules}\n{new_rules}'
+        return f'{new_rules}'
     
     
 THINKER_PROMPT = dedent("""
