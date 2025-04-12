@@ -8,13 +8,20 @@ import httpx
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt
+import traceback
 # from langgraph.prebuilt import ToolNode
 # from langgraph.graph.message import add_messages
 from langgraph.graph.graph import CompiledGraph
 from langchain_core.messages import HumanMessage, AIMessage
 # from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
-from .prompts import THINKER_PROMPT
+from .prompts import (
+    THINKER_PROMPT,
+    INITIALEXEPROMPT,
+    REPEATEDEXEPROMPT,
+    EXEPROMPT,
+    TASK_INSTRUCTIONS
+)
 from Utils.structured_llm import StructuredLLMHandler
 from Utils.routing_module import InternalState, Router, RouteConfig
 from Utils.schemas import (
@@ -28,6 +35,23 @@ from .Browser_Agent import BrowserAgentHandler
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("AutoAgent")
 
+
+class InterruptionContext(BaseModel):
+    interrup : bool
+    next_step : Optional[str] = None
+    question : Optional[str] = None
+
+class ExeActionStruct(BaseModel):
+    interruption_context : InterruptionContext
+    final_response : Optional[str] = None
+
+class ActionOutputStruct(BaseModel):
+    instructions : str
+
+class ProcessContext(BaseModel):
+    process_history : List[str] = Field(default_factory=list)
+    next_step : Optional[str] = None
+    
 class AutoAgentState(BaseModel):
     """State model for AutoAgent"""
     user_task: str
@@ -36,10 +60,12 @@ class AutoAgentState(BaseModel):
     route_config : Dict[str,RouteConfig] =Field(default_factory=dict)
     research_results: List[str] = Field(default_factory=list)
     tasks: List[Task] = Field(default_factory=list)
-    execution_results: List[Dict[str, Any]] = Field(default_factory=list)
-    errors: List[str] = Field(default_factory=list)
     send_list : Dict[str, List[InternalState]] = Field(default_factory=dict)
     messages: List[Union[HumanMessage, AIMessage]] = Field(default_factory=list)
+    step : int = Field(default=0)
+    waiting : bool = Field(default = False)
+    question : Optional[str] = None
+    process_context : ProcessContext
     results : Dict[str,Any] = Field(default_factory=dict)
 
 class AutoAgent:
@@ -530,6 +556,19 @@ class AutoAgent:
             state.errors.append(error_msg)
             return state
     
+    def human_node(state: AutoAgentState):
+        value = interrupt(
+            # Any JSON serializable value to surface to the human.
+            # For example, a question or a piece of text or a set of keys in the state
+        {
+            "text_to_revise": state["some_text"]
+        }
+        )
+        # Update the state with the human's input or route the graph based on the input.
+        return {
+            "some_text": value
+        }
+        
     async def executor_node(self, state: AutoAgentState) -> AutoAgentState:
         """
         Execute the validated tasks using the browser agent.
@@ -542,28 +581,83 @@ class AutoAgent:
         """
         logger.info("Executing validated tasks")
         
-        # if self.queue_mech.activated:
-        #     pass
-        if self.BrowserAgent.has_pending_input_requests(context_id):
-                                # Use LangGraph's interrupt to get user input
-                    # Provide the input to the browser agent
-            await handler.provide_user_input(context_id, user_input)
-        
-        else:
-            task =  state.tasks[-1].task_description
-            try:
-                context_id = state["context_id"]
+        step = state.step
+        context_id = state.context_id
+        task =  state.tasks[-1].task_description
+        waiting_flag = state.waiting
+        kwargs = {"task" : task}
+        try:
+            
+            if waiting_flag and step < self._loop_steps:
+                process_context : ProcessContext = state.process_context
+                kwargs["_process_history"] = process_context.process_history
+                user_input = state.input
+                    
+                response : ActionOutputStruct = await self.LLMHandler.get_structured_response(
+                        prompt=REPEATEDEXEPROMPT, 
+                        output_structure=ActionOutputStruct,
+                        use_model="google",
+                        task = task,
+                        _process_history = "Step : ".join(process_context.process_history),
+                        _next_step = process_context.next_step,
+                        user_input = user_input)
                 
-                # Check if browser agent is waiting for input
+                instructions = response.instructions
+                    
+            else:
+                response : ActionOutputStruct= await self.LLMHandler.get_structured_response(
+                        prompt=INITIALEXEPROMPT, 
+                        output_structure=ActionOutputStruct,
+                        use_model="google",
+                        task = task )
                 
+                instructions = response.instructions
+                
+            response_history = await self.BrowserAgent.run_task(
+                    context_id=context_id,
+                    task = f"{instructions} \n -{TASK_INSTRUCTIONS}",
+                    use_vision=True)
+                    
+            browser_response = response_history.extracted_content()[-1]
+            kwargs["_browser_response"] = browser_response
 
+            next_action : ExeActionStruct = await self.LLMHandler.get_structured_response(
+                        prompt=EXEPROMPT, 
+                        output_structure=ExeActionStruct,
+                        use_model="google",
+                        **kwargs
+                        )
+                    
+            if next_action.interruption_context.interrup:
+                #Updating state
+                state.process_context.process_history.append(instructions)
+                state.process_context.next_step = next_action.interruption_context.next_step
+                state.question = next_action.interruption_context.question
+                state.waiting = True
+                state.routes["executor"] = ["human_input"]
+                state.route_config["executor"] = RouteConfig(
+                    from_node="executor",
+                    conditional_nodes=["humman_input"]
+                )
+                    
+            else:
+                state.results = next_action.final_response
+                state.routes["executor"] = [END]
+                state.route_config["executor"] = RouteConfig(
+                    from_node="executor",
+                    conditional_nodes=[END]
+                )
                 
-                return state
-            except Exception as e:
-                error_msg = f"Error in executor_node: {str(e)}"
-                logger.error(error_msg)
-                state.errors.append(error_msg)
-                return state
+            state.step += 1 
+            return state   
+        
+        except Exception as e:
+            logger.error(
+                f"[{state.context_id}] Task execution failed: {str(e)}\n"
+                f"Traceback: {traceback.format_exc()}"
+            )
+            raise e
+        
     
     async def run(self, user_task: str) -> Dict[str, Any]:
         """
@@ -588,26 +682,13 @@ class AutoAgent:
             
             except Exception as e:
                 raise e
-            # Format and return results
-            # return {
-            #     "query": user_task,
-            #     # "messages": [{"role": msg.type, "content": msg.content} for msg in final_state.messages],
-            #     # "research_results": [result.dict() for result in final_state.research_results],
-            #     "tasks": [task.dict() for task in final_state.tasks],
-            #     # "execution_results": final_state.execution_results,
-            #     "errors": final_state.errors
-            # }
+            
             return final_state
         
         except Exception as e:
             logger.error(f"Error running agent: {str(e)}")
             raise e 
-            # return {
-            #     "query": user_task,
-            #     "error": str(e),
-            #     "status": "failed"
-            # }
-    
+        
     async def close(self):
         """Close any open resources."""
         await self.http_client.aclose()

@@ -38,3 +38,9 @@ For Reserach Task you must properly define the Thought for Reseach.
 The User provided Query is :
 {user_task}
 """)
+
+TASK_INSTRUCTIONS = dedent("""""")
+
+REPEATEDEXEPROMPT = dedent("""""")
+EXEPROMPT = dedent("""""")
+INITIALEXEPROMPT = dedent("""""")

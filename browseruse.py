@@ -28,7 +28,7 @@ llm = ChatGoogleGenerativeAI(
     max_retries=2,
 )
 
-browser_config = BrowserConfig(headless=False,
+browser_config = BrowserConfig(headless=True,
                                disable_security=True)
 
 context_config = BrowserContextConfig(
@@ -79,6 +79,7 @@ async def run_search(task1: str):
         agent1 = Agent(
             browser_context=context,
             controller=custom_controller,
+            context=context,
             planner_llm=llm,
             task=task1,
             system_prompt_class=MySystemPrompt,
@@ -99,12 +100,11 @@ async def run_search(task1: str):
         
         # history2 = await agent2.run()
         
-        # Process results
-        errors1 = history1.errors()
-        # errors2 = history2.errors()
+        # Process resultsc 
+
         
         logger.info("Tasks completed")
-        return errors1
+        return history1
         
     except Exception as e:
         logger.error(f"Error during task execution: {str(e)}")
@@ -134,10 +134,11 @@ def main():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        errors1= loop.run_until_complete(run_search(task1))
+        history = loop.run_until_complete(run_search(task1))
         
         # Print results
-        print("Results from Task 1:", errors1)
+        print("Results from Task 1- >Extracted content :", history.extracted_content())
+        print("Results from Task 1:", history)
         # print("Results from Task 2:", errors2)
         
     except KeyboardInterrupt:

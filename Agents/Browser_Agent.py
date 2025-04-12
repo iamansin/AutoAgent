@@ -1,4 +1,4 @@
-from browser_use import Agent, Controller, Browser, BrowserConfig
+from browser_use import Agent, Browser, BrowserConfig
 from browser_use.browser.context import BrowserContextConfig
 from typing import Optional, Union, Dict, Any, List, Tuple
 import os
@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 import uuid
-from asyncio import Future, Queue
+from langchain.chat_models.base import BaseChatModel
 from Utils.CustomBrowserContext import ExtendedBrowserContext
 from .custom_controllers.base_controller import ControllerRegistry
 
@@ -37,8 +37,10 @@ class BrowserAgentHandler:
     
     def __init__(
         self,
+        llm_dict : Dict[str, BaseChatModel],
         max_browsers: int = 10,
         max_contexts_per_browser: int = 10,
+        ss_interval : float = 2.5,
         browser_config: Optional[BrowserConfig] = None,
         context_config: Optional[BrowserContextConfig] = None,
         custom_controller: Optional[ControllerRegistry] = None,
@@ -63,9 +65,11 @@ class BrowserAgentHandler:
         self._max_contexts_per_browser = max_contexts_per_browser
         self._browser_config = browser_config if browser_config else BrowserConfig()
         self._context_config = context_config if context_config else BrowserContextConfig()
+        self._ss_interval = ss_interval
         self._custom_controller = custom_controller
         self._log_dir = log_dir
-        
+        self._llm_dict =  llm_dict
+        self._llm = [model for model in llm_dict.values()][0]
         # Map of browser instances and their contexts
         # {browser_id: {"browser": Browser, "contexts": {context_id: context_obj}}}
         self._browsers = {}
@@ -156,9 +160,6 @@ class BrowserAgentHandler:
             if not context_id:
                 context_id = str(uuid.uuid4())
             
-            # Create input queue for this context
-            self._input_queues[context_id] = Queue()
-            
             logger.info(f"Creating context {context_id} in browser {browser_id}")
             
             # Create browser context
@@ -167,7 +168,7 @@ class BrowserAgentHandler:
                 browser=browser,
                 config=self._context_config,
                 screenshot_dir=f"agent_screenshots/{context_id}",
-                screenshot_interval=1.9,
+                screenshot_interval=self._ss_interval,
                 transmit=False,
                 debug_level=logging.WARNING
             )
@@ -186,7 +187,7 @@ class BrowserAgentHandler:
                 del self._input_queues[context_id]
             raise RuntimeError(f"Context creation failed: {e}")
     
-    def get_context(self, context_id: str) -> Optional[ExtendedBrowserContext]:
+    async def get_context(self, context_id: str) -> Optional[ExtendedBrowserContext]:
         """
         Get a browser context by ID.
         
@@ -198,7 +199,8 @@ class BrowserAgentHandler:
         """
         if context_id not in self._context_to_browser:
             logger.warning(f"Context {context_id} not found")
-            return None
+            logger.warning(f"Creating new Context with : {context_id}")
+            id = await self.create_context(context_id=context_id)
             
         browser_id = self._context_to_browser[context_id]
         return self._browsers[browser_id]["contexts"].get(context_id)
@@ -207,9 +209,7 @@ class BrowserAgentHandler:
         self,
         context_id: str,
         task: str,
-        llm: Any,
         use_vision: bool = True,
-        save_conversation: bool = True,
         agent_kwargs: Optional[Dict[str, Any]] = None
     ) -> Agent:
         """
@@ -243,7 +243,7 @@ class BrowserAgentHandler:
             # Set up agent kwargs
             kwargs = {
                 "task": task,
-                "llm": llm,
+                "llm": self._llm,
                 "use_vision": use_vision,
                 "browser_context": context
             }
@@ -252,15 +252,6 @@ class BrowserAgentHandler:
             if self._custom_controller:
                 kwargs["controller"] = self._custom_controller
             
-            # # Add conversation logging if enabled
-            # if save_conversation:
-            #     conversation_path = self._get_timestamp_path(f"{self._log_dir}/{context_id}_conversation")
-            #     kwargs["save_conversation_path"] = conversation_path
-            
-            # Add custom callback for input handling
-            # kwargs["custom_callback"] = self._create_input_callback(context_id)
-            
-            # Add any additional kwargs
             if agent_kwargs:
                 kwargs.update(agent_kwargs)
             
@@ -268,8 +259,8 @@ class BrowserAgentHandler:
             logger.info(f"Creating agent for context {context_id} with task: {task}")
             agent = Agent(**kwargs)
             
-            # Store agent reference
-            self._context_to_agent[context_id] = agent
+            # # Store agent reference
+            # self._context_to_agent[context_id] = agent
             
             return agent
             
@@ -277,100 +268,10 @@ class BrowserAgentHandler:
             logger.error(f"Failed to create agent for context {context_id}: {e}")
             raise RuntimeError(f"Agent creation failed: {e}")
     
-    # def _create_input_callback(self, context_id: str):
-    #     """
-    #     Create a callback function for handling user input within browser-use.
-        
-    #     Args:
-    #         context_id: ID of the context
-            
-    #     Returns:
-    #         Callback function that can be used by browser-use
-    #     """
-    #     async def input_callback(prompt: str) -> str:
-    #         """
-    #         Custom callback that allows browser_use to request input from the user.
-            
-    #         Args:
-    #             prompt: The prompt to show the user
-                
-    #         Returns:
-    #             User input as a string
-    #         """
-    #         # Create a future that will be resolved when input is received
-    #         input_future = Future()
-            
-    #         # Put the request for input in the shared state
-    #         await self.request_user_input(context_id, prompt, input_future)
-            
-    #         # Wait for the result
-    #         return await input_future
-            
-    #     return input_callback
-    
-    # async def request_user_input(self, context_id: str, prompt: str, future: Future) -> None:
-    #     """
-    #     Request input from the user during agent execution.
-        
-    #     Args:
-    #         context_id: ID of the context requesting input
-    #         prompt: The prompt to show the user
-    #         future: Future to resolve with user input
-    #     """
-    #     if context_id not in self._input_queues:
-    #         logger.error(f"No input queue for context {context_id}")
-    #         future.set_exception(ValueError(f"No input queue for context {context_id}"))
-    #         return
-            
-    #     # Add the request to the queue
-    #     await self._input_queues[context_id].put({
-    #         "prompt": prompt,
-    #         "future": future
-    #     })
-        
-    #     logger.info(f"Input requested for context {context_id}: {prompt}")
-    
-    # async def provide_user_input(self, context_id: str, input_value: str) -> bool:
-    #     """
-    #     Provide user input for a pending input request.
-        
-    #     Args:
-    #         context_id: ID of the context to provide input for
-    #         input_value: User input value
-            
-    #     Returns:
-    #         True if input was processed, False if no pending requests
-            
-    #     Raises:
-    #         ValueError: If context doesn't exist
-    #     """
-    #     if context_id not in self._input_queues:
-    #         raise ValueError(f"Context {context_id} does not exist or has no input queue")
-            
-    #     queue = self._input_queues[context_id]
-        
-    #     if queue.empty():
-    #         logger.warning(f"No pending input requests for context {context_id}")
-    #         return False
-            
-    #     # Get the request
-    #     request = await queue.get()
-    #     future = request["future"]
-        
-    #     # Resolve the future with the input
-    #     if not future.done():
-    #         future.set_result(input_value)
-    #         logger.info(f"Input provided for context {context_id}")
-    #         return True
-    #     else:
-    #         logger.warning(f"Input request for context {context_id} already resolved")
-    #         return False
-    
     async def run_task(
         self,
         context_id: str,
         task: Optional[str] = None,
-        llm: Optional[Any] = None,
         use_vision: bool = True,
         timeout: Optional[float] = None,
         agent_kwargs: Optional[Dict[str, Any]] = None
@@ -395,27 +296,23 @@ class BrowserAgentHandler:
         """
         try:
             # Get existing agent or create new one
-            agent = self._context_to_agent.get(context_id)
+            # agent = self._context_to_agent.get(context_id)
             
-            if agent is None:
-                if not task or not llm:
-                    raise ValueError("Task and LLM must be provided when creating a new agent")
+            if not task:
+                raise ValueError("Task and LLM must be provided when creating a new agent")
                 
-                agent = await self.create_agent(
+            agent = await self.create_agent(
                     context_id=context_id,
                     task=task,
-                    llm=llm,
                     use_vision=use_vision,
                     agent_kwargs=agent_kwargs
                 )
-            elif task:  # Update existing agent's task
-                agent.task = task
-            
+
             # Run the agent with timeout if specified
             if timeout:
-                result = await asyncio.wait_for(agent.run(), timeout=timeout)
+                result = await asyncio.wait_for(agent.run(max_steps=self.max_steps), timeout=timeout)
             else:
-                result = await agent.run()
+                result = await agent.run(max_steps=self.max_steps)
                 
             logger.info(f"Agent for context {context_id} completed task successfully")
             return result
@@ -539,9 +436,10 @@ class BrowserAgentHandler:
         Returns:
             True if there are pending input requests, False otherwise
         """
-        if context_id not in self._input_queues:
+        if context_id in self._input_queues:
+            return True
+        else:
             return False
-        return not self._input_queues[context_id].empty()
     
     async def __aenter__(self):
         """
