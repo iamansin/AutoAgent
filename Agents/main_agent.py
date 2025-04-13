@@ -65,7 +65,9 @@ class AutoAgentState(BaseModel):
     step : int = Field(default=0)
     waiting : bool = Field(default = False)
     question : Optional[str] = None
-    process_context : ProcessContext
+    process_context : ProcessContext = None
+    context_id : str
+    input : Dict[str,str] = Field(default_factory=dict)
     results : Dict[str,Any] = Field(default_factory=dict)
 
 class AutoAgent:
@@ -78,6 +80,8 @@ class AutoAgent:
         self,
         llm_dict :Dict[str,Any],
         fallback_llm : str = None,
+        browser_agent : BrowserAgentHandler = None,
+        max_steps : int = 100,
         search_api_key: Optional[str] = None,
         search_engine: str = "duckduckgo",
         max_search_results: int = 10,
@@ -105,12 +109,13 @@ class AutoAgent:
         self.timeout = timeout
         self.max_retries = max_retries
         self.verbose = verbose
+        self._loop_steps = max_steps
         self.LLMHandler = StructuredLLMHandler(llm_dict=llm_dict, 
                                                fallback_llm=fallback_llm)
         self._Router :Router = Router(name = "autoagent")
         # Initialize HTTP client for API calls
         self.http_client = httpx.AsyncClient(timeout=timeout)
-        self.BrowserAgent = BrowserAgentHandler()
+        self.BrowserAgent = browser_agent or BrowserAgentHandler(llm_dict=llm_dict)
         # Set up the workflow graph
         self.workflow :CompiledGraph = self._build_workflow()
         
@@ -125,11 +130,14 @@ class AutoAgent:
         workflow.add_node("researcher", self.researcher_node)
         # workflow.add_node("validator", RunnableLambda(self.validator_node))
         workflow.add_node("executor", self.executor_node)
+        workflow.add_node("human_input", self.human_node)
         
         # Define edges
         workflow.add_conditional_edges("thinker", self._Router.get_routing_function("thinker"))
+        workflow.add_conditional_edges("executor", self._Router.get_routing_function("executor"))
+        workflow.add_edge("human_input", "executor")
         # workflow.add_edge("researcher", "validator")
-        workflow.add_edge(["executor", "researcher"], END)
+        # workflow.add_edge(["executor", "researcher"], END)
         # workflow.add_edge("thinker", END)
         
         # Set the entry point
@@ -556,18 +564,17 @@ class AutoAgent:
             state.errors.append(error_msg)
             return state
     
-    def human_node(state: AutoAgentState):
-        value = interrupt(
-            # Any JSON serializable value to surface to the human.
-            # For example, a question or a piece of text or a set of keys in the state
-        {
-            "text_to_revise": state["some_text"]
-        }
-        )
-        # Update the state with the human's input or route the graph based on the input.
-        return {
-            "some_text": value
-        }
+    async def human_node(self, state: AutoAgentState):
+        logger.info("Now taking user input")
+        waiting = state.waiting
+        step = state.step
+        if waiting and step < self._loop_steps:
+            logger.info(f"The question is : {state.question}")
+            logger.info(f"The next step is :{state.process_context.next_step}")
+            await asyncio.sleep(10)
+        
+        state.input["username"] = "amanragu200@gmail.com"
+        return state
         
     async def executor_node(self, state: AutoAgentState) -> AutoAgentState:
         """
@@ -584,11 +591,11 @@ class AutoAgent:
         step = state.step
         context_id = state.context_id
         task =  state.tasks[-1].task_description
-        waiting_flag = state.waiting
+        waiting = state.waiting
         kwargs = {"task" : task}
         try:
             
-            if waiting_flag and step < self._loop_steps:
+            if waiting and step < self._loop_steps:
                 process_context : ProcessContext = state.process_context
                 kwargs["_process_history"] = process_context.process_history
                 user_input = state.input
@@ -600,27 +607,33 @@ class AutoAgent:
                         task = task,
                         _process_history = "Step : ".join(process_context.process_history),
                         _next_step = process_context.next_step,
-                        user_input = user_input)
+                        user_input = json.dumps(user_input))
                 
                 instructions = response.instructions
                     
             else:
-                response : ActionOutputStruct= await self.LLMHandler.get_structured_response(
-                        prompt=INITIALEXEPROMPT, 
-                        output_structure=ActionOutputStruct,
-                        use_model="google",
-                        task = task )
+                # response : ActionOutputStruct= await self.LLMHandler.get_structured_response(
+                #         prompt=INITIALEXEPROMPT, 
+                #         output_structure=ActionOutputStruct,
+                #         use_model="google",
+                #         task = task )
                 
-                instructions = response.instructions
-                
+                # instructions = response.instructions
+                instructions = task
+
             response_history = await self.BrowserAgent.run_task(
                     context_id=context_id,
-                    task = f"{instructions} \n -{TASK_INSTRUCTIONS}",
+                    task = f"{TASK_INSTRUCTIONS} \n {instructions}",
                     use_vision=True)
                     
-            browser_response = response_history.extracted_content()[-1]
+            try:
+                browser_response = response_history.final_result()
+            except IndexError:
+                browser_response = response_history.errors()
+                logger.warning(f"Got some error while Browser Agent Execution : {browser_response}")
+                
             kwargs["_browser_response"] = browser_response
-
+            logger.info(f"Browser Response : {browser_response}")
             next_action : ExeActionStruct = await self.LLMHandler.get_structured_response(
                         prompt=EXEPROMPT, 
                         output_structure=ExeActionStruct,
@@ -630,8 +643,13 @@ class AutoAgent:
                     
             if next_action.interruption_context.interrup:
                 #Updating state
-                state.process_context.process_history.append(instructions)
-                state.process_context.next_step = next_action.interruption_context.next_step
+                if not state.process_context:
+                    state.process_context = ProcessContext(
+                        process_history=[instructions],
+                        next_step=next_action.interruption_context.next_step)
+                else:
+                    state.process_context.process_history.append(instructions)
+                    state.process_context.next_step = next_action.interruption_context.next_step
                 state.question = next_action.interruption_context.question
                 state.waiting = True
                 state.routes["executor"] = ["human_input"]
@@ -639,6 +657,7 @@ class AutoAgent:
                     from_node="executor",
                     conditional_nodes=["humman_input"]
                 )
+                
                     
             else:
                 state.results = next_action.final_response
@@ -659,7 +678,7 @@ class AutoAgent:
             raise e
         
     
-    async def run(self, user_task: str) -> Dict[str, Any]:
+    async def run(self, user_task: str,context_id :str) -> Dict[str, Any]:
         """
         Run the agent on a given query.
         
@@ -673,7 +692,8 @@ class AutoAgent:
             # Prepare initial state
             initial_state = AutoAgentState(
                 user_task=user_task,
-                messages=[HumanMessage(content=user_task)]
+                messages=[HumanMessage(content=user_task)],
+                context_id=context_id
             )
             
             # Run the workflow

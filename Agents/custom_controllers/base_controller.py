@@ -1,5 +1,6 @@
 from browser_use import Controller, ActionResult, Browser
 from typing import Type, Callable, Awaitable
+from git import Optional
 from pydantic import BaseModel
 
 class ControllerRegistry:
@@ -11,8 +12,8 @@ class ControllerRegistry:
     
     def register_action(self, name :str, 
                         description: str,
-                        param_model: Type[BaseModel], 
-                        handler: Callable | Awaitable):
+                        handler: Callable | Awaitable,
+                        param_model: Optional[Type[BaseModel]] = None):
         """Register an action with the controller.
         
         Args:
@@ -21,8 +22,8 @@ class ControllerRegistry:
             param_model: The Pydantic model for the action parameters
             handler: The sync/async function that implements the action
         """
-        action_decorator = self._controller.action(description, 
-                                                   param_model=param_model)
+        action_decorator = self._controller.action(description)
+                                                #    param_model=param_model)
         
         registered_action = action_decorator(handler)
         self._registered_actions[name] = registered_action

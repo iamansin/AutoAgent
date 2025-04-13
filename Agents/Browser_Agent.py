@@ -9,7 +9,7 @@ import uuid
 from langchain.chat_models.base import BaseChatModel
 from Utils.CustomBrowserContext import ExtendedBrowserContext
 from .custom_controllers.base_controller import ControllerRegistry
-
+from .prompts import MySystemPrompt
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +44,8 @@ class BrowserAgentHandler:
         browser_config: Optional[BrowserConfig] = None,
         context_config: Optional[BrowserContextConfig] = None,
         custom_controller: Optional[ControllerRegistry] = None,
+        use_planner_model : bool = False,
+        planner_model : str = None,
         log_dir: str = "logs"
     ):
         """
@@ -82,6 +84,9 @@ class BrowserAgentHandler:
         
         # Input queue for each context
         self._input_queues = {}
+        
+        self._use_planner_model = use_planner_model
+        self.planner_model = planner_model
         
         # Create logs directory if it doesn't exist
         os.makedirs(self._log_dir, exist_ok=True)
@@ -172,7 +177,8 @@ class BrowserAgentHandler:
                 transmit=False,
                 debug_level=logging.WARNING
             )
-            
+            logger.info(f"Now intialising BrowserContext : {context_id or 101}")
+            await context.initialize()
             # Store context references
             self._browsers[browser_id]["contexts"][context_id] = context
             self._context_to_browser[context_id] = browser_id
@@ -231,7 +237,7 @@ class BrowserAgentHandler:
             RuntimeError: If agent creation fails
         """
         # Check if context exists
-        context = self.get_context(context_id)
+        context = await self.get_context(context_id)
         if not context:
             raise ValueError(f"Context {context_id} does not exist")
         
@@ -245,18 +251,26 @@ class BrowserAgentHandler:
                 "task": task,
                 "llm": self._llm,
                 "use_vision": use_vision,
-                "browser_context": context
+                "browser_context": context,
+                "system_prompt_class" : MySystemPrompt
             }
             
             # Add controller if available
             if self._custom_controller:
                 kwargs["controller"] = self._custom_controller
-            
+                
+            if self._use_planner_model:
+                if self.planner_model:
+                    kwargs["planner_llm"] = self._llm_dict[self.planner_model]
+                else:
+                    print("There is no planner model name provided; using the main model as planner!")
+                    kwargs["planner_llm"] = next(iter(self._llm_dict.values()))
+                    
             if agent_kwargs:
                 kwargs.update(agent_kwargs)
             
             # Create the agent
-            logger.info(f"Creating agent for context {context_id} with task: {task}")
+            # logger.info(f"Creating agent for context {context_id} with task: {task}")
             agent = Agent(**kwargs)
             
             # # Store agent reference
@@ -312,7 +326,7 @@ class BrowserAgentHandler:
             if timeout:
                 result = await asyncio.wait_for(agent.run(max_steps=self.max_steps), timeout=timeout)
             else:
-                result = await agent.run(max_steps=self.max_steps)
+                result = await agent.run()
                 
             logger.info(f"Agent for context {context_id} completed task successfully")
             return result
