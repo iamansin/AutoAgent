@@ -22,8 +22,8 @@ class ControllerRegistry:
             param_model: The Pydantic model for the action parameters
             handler: The sync/async function that implements the action
         """
-        action_decorator = self._controller.action(description)
-                                                #    param_model=param_model)
+        action_decorator = self._controller.action(description,
+                                                   param_model=param_model)
         
         registered_action = action_decorator(handler)
         self._registered_actions[name] = registered_action

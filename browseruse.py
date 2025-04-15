@@ -6,13 +6,13 @@ from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from browser_use import Agent, Browser, BrowserConfig, Controller, ActionResult
-from browser_use.browser.context import BrowserContextConfig, BrowserContext
+from browser_use.browser.context import BrowserContextConfig
 from Agents import custom_controllers
 from Agents.prompts import MySystemPrompt
-from Utils.CustomBrowser import ExtendedBrowser
-from Utils.CustomBrowserContext import ExtendedBrowserContext
-from Agents.custom_controllers.Interrup_controller import get_human_in_loop, HumanInput
-from Agents.custom_controllers.base_controller import ControllerRegistry
+from Utils.CustomBrowser import StealthBrowser, StealthBrowserConfig
+# from Utils.CustomBrowserContext import ExtendedBrowserContext
+# from Agents.custom_controllers.Interrup_controller import get_human_in_loop, HumanInput
+from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot, take_screenshot
 # Configure basic logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,29 +28,38 @@ llm = ChatGoogleGenerativeAI(
     max_retries=2,
 )
 
-browser_config = BrowserConfig(headless=True,
-                               disable_security=True)
+# browser_config = BrowserConfig(headless=False,
+#                                disable_security=True)
 
-context_config = BrowserContextConfig(
-    cookies_file="./browser-data/Cookies/cookies.json",
-    wait_for_network_idle_page_load_time=3.0,
-    browser_window_size={'width': 900, 'height': 750},
-    locale='en-US',
-    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
-    highlight_elements=True,
-    viewport_expansion=500,
-)
+# context_config = BrowserContextConfig(
+#     cookies_file="./browser-data/Cookies/cookies.json",
+#     wait_for_network_idle_page_load_time=3.0,
+#     browser_window_size={'width': 900, 'height': 750},
+#     locale='en-US',
+#     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
+#     highlight_elements=False,
+#     viewport_expansion=500,
+# )
 
 # Create Browser and Context objects
-browser = Browser(config=browser_config)
-context = ExtendedBrowserContext(
-    browser=browser, 
-    config=context_config,
-    screenshot_dir="agent_screenshots",  # Explicit directory
-    screenshot_interval=2.5,             # Take a screenshot every 1.5 seconds
-    transmit=False, 
-    debug_level=logging.WARNING  # For more verbose logging while debugging
-)
+# browser = Browser(config=browser_config)
+config = StealthBrowserConfig(
+            headless=False,
+            locale="en-US",
+            timezone_id="America/New_York",
+            viewport={"width": 1920, "height": 1080},
+            minimum_wait_page_load_time=1.0
+        )
+browser = StealthBrowser(config)
+
+# context = ExtendedBrowserContext(
+#     browser=browser, 
+#     config=context_config,
+#     screenshot_dir="agent_screenshots",  # Explicit directory
+#     screenshot_interval=2.5,             # Take a screenshot every 1.5 seconds
+#     transmit=False, 
+#     debug_level=logging.WARNING  # For more verbose logging while debugging
+# )
 
 
 # registry = ControllerRegistry()
@@ -63,27 +72,21 @@ context = ExtendedBrowserContext(
 # custom_controller = registry.get_controller()
 custom_controller = Controller()
 
-@custom_controller.action('Ask user for information')
-def ask_human(question: str) -> str:
-    """Use this tool when you want to ask something to the use Or,
-    If you do not have some infromation that you want to ask the user."""
-    answer = input(f'\n{question}\nInput: ')
-    return ActionResult(extracted_content=answer)
+
 
 async def run_search(task1: str):
     try:
         # Initialize context
-        await context.initialize()
-        
+        # await context.initialize()
+        context = await browser.new_context()
         # Create and run first agent
-        agent1 = Agent(
-            browser_context=context,
+        agent1 : Agent = Agent(
             controller=custom_controller,
-            context=context,
-            planner_llm=llm,
+            browser_context= context,
             task=task1,
             system_prompt_class=MySystemPrompt,
-            llm=llm
+            llm=llm,
+            register_new_step_callback = on_step_screenshot,
         )
         
         logger.info("Running first task...")
@@ -112,7 +115,7 @@ async def run_search(task1: str):
     finally:
         try:
             # Ensure context and browser cleanup
-            await context.close()
+            # await context.close()
             await browser.close()
         except Exception as cleanup_error:
             logger.error(f"Error during cleanup: {str(cleanup_error)}")

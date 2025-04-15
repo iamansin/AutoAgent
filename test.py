@@ -1,6 +1,6 @@
 from enum import auto
 from wsgiref.util import application_uri
-from Agents import custom_controllers
+from Agents.custom_controllers.User_info_controller import get_user_info, ModelPrompt
 from Agents.Browser_Agent import BrowserAgentHandler
 from Agents.main_agent import AutoAgent, AutoAgentState
 from dotenv import load_dotenv
@@ -12,7 +12,7 @@ import os
 import asyncio
 from langgraph.checkpoint.memory import InMemorySaver
 from Agents.custom_controllers.base_controller import ControllerRegistry
-from Agents.custom_controllers.GoogleAuth_controller import get_user_info
+# from Agents.custom_controllers.GoogleAuth_controller import get_user_info
 import json
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -41,7 +41,7 @@ context_config = BrowserContextConfig(
     browser_window_size={'width': 500, 'height': 350},
     locale='en-US',
     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
-    highlight_elements=True,
+    highlight_elements=False,
     viewport_expansion=500,
 )
 
@@ -49,8 +49,10 @@ registry = ControllerRegistry()
 
 registry.register_action(name="user_info_helper",
                          description="This method should be firstly used for getting the required info if not found",
-                         handler= get_user_info
+                         handler= get_user_info,
+                         param_model=ModelPrompt
                          )
+
 controller = registry.get_controller()
 browser_agent = BrowserAgentHandler(
     llm_dict= llm_dict,

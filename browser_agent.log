@@ -1,0 +1,132 @@
+2025-04-15 14:49:53,308 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 14:49:57,430 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 14:49:57,445 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 1/5
+2025-04-15 14:50:02,452 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 14:50:06,554 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 14:50:06,556 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 2/5
+2025-04-15 14:50:11,558 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 14:50:15,638 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 14:50:15,641 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 3/5
+2025-04-15 14:50:20,649 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 14:50:24,749 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 14:50:24,752 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 4/5
+2025-04-15 14:50:29,763 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 14:50:33,848 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 14:50:33,849 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 5/5
+2025-04-15 14:50:38,859 - browser_agent_frontend - ERROR - Maximum reconnection attempts reached
+2025-04-15 15:11:13,761 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 15:11:17,874 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 15:11:17,878 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 1/5
+2025-04-15 15:11:22,889 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 15:11:26,965 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 15:11:26,969 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 2/5
+2025-04-15 15:11:31,977 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 15:11:36,066 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 15:11:36,068 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 3/5
+2025-04-15 15:11:41,074 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 15:11:45,173 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 15:11:45,175 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 4/5
+2025-04-15 15:11:50,191 - browser_agent_frontend - INFO - Connecting to WebSocket server at ws://localhost:8000/ws
+2025-04-15 15:11:54,280 - browser_agent_frontend - ERROR - WebSocket error: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+Traceback (most recent call last):
+  File "D:\work\auto-form-agent\frontend\app.py", line 58, in connect
+    self.websocket = await websockets.client.connect(self.uri)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\work\auto-form-agent\venv\Lib\site-packages\websockets\legacy\client.py", line 652, in __await_impl__
+    _transport, protocol = await self._create_connection()
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AMAN\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1130, in create_connection
+    raise OSError('Multiple exceptions: {}'.format(
+OSError: Multiple exceptions: [Errno 10061] Connect call failed ('::1', 8000, 0, 0), [Errno 10061] Connect call failed ('127.0.0.1', 8000)
+2025-04-15 15:11:54,282 - browser_agent_frontend - INFO - Disconnected. Reconnect attempt 5/5
+2025-04-15 15:11:59,298 - browser_agent_frontend - ERROR - Maximum reconnection attempts reached

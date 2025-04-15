@@ -1,95 +1,75 @@
-# controllers/screenshot_controller.py
-from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 from browser_use import ActionResult, Browser
 import os
 import base64
 import json
 from datetime import datetime
 import websockets
+from Utils.websocket_manager import ws_manager, WebSocketMessage
+import uuid
+import logging
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("AutoAgent")
 
-class TakeScreenshotParams(BaseModel):
-    """Parameters for taking a screenshot."""
-    save_dir: str = "./screenshots"
-    websocket_url: str = "ws://localhost:8765"
-    filename_prefix: Optional[str] = "screenshot"
-    quality: Optional[int] = 80
-    full_page: Optional[bool] = True
-    include_timestamp: Optional[bool] = True
-    transmit: Optional[bool] = False  # NEW parameter
+# Global configuration variables
+SAVE_DIR = "./agent_screenshots"
+FILENAME_PREFIX = "screenshot"
+INCLUDE_TIMESTAMP = False
+TRANSMIT = True
+INCLUDE_STEP_NUMBER = True
+QUALITY = 80
+FULL_PAGE = False
+BATCH_FOLDER = None
 
+def setup_directories(batch_folder: Optional[str] = None) -> str:
+    """Set up and return the directory path for saving screenshots."""
+    save_path = SAVE_DIR
+    if batch_folder:
+        save_path = os.path.join(SAVE_DIR, batch_folder)
+    os.makedirs(save_path, exist_ok=True)
+    return save_path
 
-async def take_screenshot(params: TakeScreenshotParams, browser: Browser) -> ActionResult:
-    """
-    Takes a screenshot of the current page.
-    - If `transmit` is False: saves to disk.
-    - If `transmit` is True: sends via WebSocket.
-    """
+async def save_and_transmit_screenshot(screenshot_b64: str, step: int, batch_folder: Optional[str] = None) -> bool:
+    """Save screenshot to file and transmit via WebSocket if enabled."""
     try:
-        # Create directory if saving locally
-        if not params.transmit:
-            os.makedirs(params.save_dir, exist_ok=True)
-            print("Created screenshots dir!!!")
-        
-        # Get current page
-        page = await browser.get_current_page()
-        
-        if not page:
-            print("There was some problem while getting the page...")
-            return ActionResult(success=False, message="No active page found")
-        
-        # Generate filename with timestamp if enabled
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if params.include_timestamp else ""
-        filename = f"{params.filename_prefix}_{timestamp}.png" if params.include_timestamp else f"{params.filename_prefix}.png"
-        file_path = os.path.join(params.save_dir, filename)
+        if not screenshot_b64:
+            return False
 
-        print("Taking the screen shot!")
-        # Take screenshot
-        screenshot_buffer = await page.screenshot(
-            path=file_path if not params.transmit else None,
-            full_page=params.full_page,
-            quality=params.quality if params.quality else None,
-            type="png"
-        )
-        print("taken screen shot!!!!")
-        websocket_status = False
-        if params.transmit:
-            base64_screenshot = base64.b64encode(screenshot_buffer).decode('utf-8')
-            websocket_status = await send_via_websocket(
-                params.websocket_url,
-                {
-                    "type": "screenshot",
-                    "filename": filename,
-                    "data": base64_screenshot,
-                    "timestamp": datetime.now().isoformat(),
-                    "url": await page.url()
-                }
+        save_path = setup_directories(batch_folder)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"{FILENAME_PREFIX}_step{step}_{timestamp}.png"
+        filepath = os.path.join(save_path, filename)
+
+        # Save to file
+        with open(filepath, "wb") as f:
+            f.write(base64.b64decode(screenshot_b64))
+
+        # Transmit via WebSocket if enabled
+        if TRANSMIT:
+            message = WebSocketMessage(
+                type="screenshot",
+                content={
+                    "image": screenshot_b64,
+                    "step": step,
+                    "timestamp": timestamp,
+                    "filename": filename
+                },
+                session_id="10"
             )
+            await ws_manager.send_message(message, "10")
 
-        return ActionResult(
-            success=True,
-            message="Screenshot transmitted via WebSocket" if params.transmit else f"Screenshot saved at {file_path}",
-            data={
-                "file_path": file_path if not params.transmit else None,
-                "websocket_sent": websocket_status,
-                "url": await page.url()
-            }
-        )
-        
+        logger.info(f"Screenshot saved successfully: {filename}")
+        return True
+
     except Exception as e:
-        return ActionResult(
-            success=False,
-            message=f"Error taking screenshot: {str(e)}"
-        )
-
-
-async def send_via_websocket(websocket_url: str, data: dict) -> bool:
-    """Sends data to a WebSocket server."""
-    try:
-        async with websockets.connect(websocket_url) as websocket:
-            await websocket.send(json.dumps(data))
-            return True
-    except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"Error processing screenshot at step {step}: {e}")
         return False
+
+async def on_step_screenshot(state: Any, model_output: Any, step: int) -> None:
+    """Handle screenshot processing for each step."""
+    if hasattr(state, 'screenshot'):
+        await save_and_transmit_screenshot(state.screenshot, step, BATCH_FOLDER)
+
+

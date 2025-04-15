@@ -2,6 +2,7 @@ from textwrap import dedent
 from browser_use import SystemPrompt
 from langchain_core.messages import SystemMessage
 from overrides import overrides
+
 class MySystemPrompt(SystemPrompt):
     @overrides
     def get_system_message(self) -> SystemMessage:

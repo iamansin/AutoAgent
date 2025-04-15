@@ -677,7 +677,6 @@ class AutoAgent:
             )
             raise e
         
-    
     async def run(self, user_task: str,context_id :str) -> Dict[str, Any]:
         """
         Run the agent on a given query.

@@ -1,5 +1,5 @@
 from browser_use import Agent, Browser, BrowserConfig
-from browser_use.browser.context import BrowserContextConfig
+from browser_use.browser.context import BrowserContextConfig, BrowserContext
 from typing import Optional, Union, Dict, Any, List, Tuple
 import os
 import asyncio
@@ -9,6 +9,7 @@ import uuid
 from langchain.chat_models.base import BaseChatModel
 from Utils.CustomBrowserContext import ExtendedBrowserContext
 from .custom_controllers.base_controller import ControllerRegistry
+from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot
 from .prompts import MySystemPrompt
 # Set up logging
 logging.basicConfig(
@@ -46,6 +47,7 @@ class BrowserAgentHandler:
         custom_controller: Optional[ControllerRegistry] = None,
         use_planner_model : bool = False,
         planner_model : str = None,
+        on_step_screenshot : bool = True,
         log_dir: str = "logs"
     ):
         """
@@ -87,7 +89,7 @@ class BrowserAgentHandler:
         
         self._use_planner_model = use_planner_model
         self.planner_model = planner_model
-        
+        self._on_step_screenshot = on_step_screenshot
         # Create logs directory if it doesn't exist
         os.makedirs(self._log_dir, exist_ok=True)
         
@@ -169,16 +171,22 @@ class BrowserAgentHandler:
             
             # Create browser context
             browser = self._browsers[browser_id]["browser"]
-            context = ExtendedBrowserContext(
-                browser=browser,
-                config=self._context_config,
-                screenshot_dir=f"agent_screenshots/{context_id}",
-                screenshot_interval=self._ss_interval,
-                transmit=False,
-                debug_level=logging.WARNING
-            )
-            logger.info(f"Now intialising BrowserContext : {context_id or 101}")
-            await context.initialize()
+            
+            if self._on_step_screenshot:
+                context = BrowserContext(browser=browser,config=self._context_config)
+                
+            else:
+                context = ExtendedBrowserContext(
+                    browser=browser,
+                    config=self._context_config,
+                    screenshot_dir=f"agent_screenshots/{context_id}",
+                    screenshot_interval=self._ss_interval,
+                    transmit=False,
+                    debug_level=logging.WARNING
+                )
+                logger.info(f"Now intialising BrowserContext : {context_id or 101}")
+                await context.initialize()
+                
             # Store context references
             self._browsers[browser_id]["contexts"][context_id] = context
             self._context_to_browser[context_id] = browser_id
@@ -265,6 +273,9 @@ class BrowserAgentHandler:
                 else:
                     print("There is no planner model name provided; using the main model as planner!")
                     kwargs["planner_llm"] = next(iter(self._llm_dict.values()))
+                    
+            if self._on_step_screenshot:
+                kwargs["register_new_step_callback"] = on_step_screenshot
                     
             if agent_kwargs:
                 kwargs.update(agent_kwargs)
