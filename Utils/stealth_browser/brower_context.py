@@ -1,149 +1,185 @@
-# Add these imports at the top
-from .config import StealthConfig
-from .stealth_browser import BrowserStealth
-from browser_use import BrowserContextConfig, Browser
-from browser_use.browser.context import BrowserContextState, BrowserSession
-from typing_extensions import Optional
-import uuid 
-from playwright.async_api import Page
-from playwright.sync_api
+from math import e
+from playwright.async_api import async_playwright
+from playwright.async_api import Browser as PlaywrightBrowser
+from browser_use import Browser
+import asyncio
 import random
-class BrowserContext:
-    def __init__(
-        self,
-        browser: 'Browser',
-        config: BrowserContextConfig | None = None,
-        state: Optional[BrowserContextState] = None,
-        stealth_config: Optional[StealthConfig] = None,
-    ):
-        self.context_id = str(uuid.uuid4())
-        self.config = config or BrowserContextConfig(**(browser.config.model_dump() if browser.config else {}))
-        self.browser = browser
-        self.state = state or BrowserContextState()
-        self.stealth_config = stealth_config or StealthConfig()
-        self.stealth = BrowserStealth(self.stealth_config)
-        
-        # Initialize these as None - they'll be set up when needed
-        self.session: BrowserSession | None = None
-        self.active_tab: Page | None = None
+import logging
+from typing import Optional
 
-    async def _create_context(self, browser: Browser):
-        """Creates a new browser context with stealth measures"""
-        if self.browser.config.cdp_url and len(browser.contexts) > 0:
-            context = browser.contexts[0]
-        elif self.browser.config.browser_binary_path and len(browser.contexts) > 0:
-            context = browser.contexts[0]
-        else:
-            # Enhanced context creation with stealth settings
-            context = await browser.new_context(
-                no_viewport=True,
-                user_agent=self.stealth.get_random_user_agent(),
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class StealthBrowser(Browser):
+    def __init__(self):
+        super().__init__()
+        # self.playwright = None
+        # self.playwright_browser = None
+        self.context = None
+        self.page = None
+
+    async def _init(self):
+        try:
+            self.playwright = await async_playwright().start()
+            
+            # Launch browser with stealth configurations
+            self.playwright_browser= await self.playwright.chromium.launch(
+                headless=False,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--disable-site-isolation-trials',
+                    '--disable-features=UserAgentClientHint',
+                    '--no-sandbox',
+                    '--disable-webgl',
+                    '--disable-threaded-scrolling',
+                    '--disable-threaded-animation',
+                    '--disable-extensions'
+                ]
+            )
+        except Exception as e:
+            raise e 
+        
+    async def get_playwright_browser(self) -> PlaywrightBrowser:
+        if self.playwright_browser is None:
+            await self._init()
+        
+        return self.playwright_browser
+    
+    async def create_stealth_context(self):
+        """Create a stealth browser context with anti-detection measures"""
+            # Create context with stealth configurations
+            
+        try:
+            self.context = await self.playwright_browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                device_scale_factor=1,
+                has_touch=False,
+                is_mobile=False,
+                locale='en-US',
+                timezone_id='America/New_York',
+                permissions=['geolocation'],
                 java_script_enabled=True,
-                bypass_csp=self.config.disable_security,
-                ignore_https_errors=self.config.disable_security,
-                record_video_dir=self.config.save_recording_path,
-                record_video_size=self.config.browser_window_size.model_dump(),
-                record_har_path=self.config.save_har_path,
-                locale=self.config.locale,
-                http_credentials=self.config.http_credentials,
-                is_mobile=self.config.is_mobile,
-                has_touch=self.config.has_touch,
-                geolocation=self.config.geolocation,
-                permissions=self.config.permissions,
-                timezone_id=self.config.timezone_id,
-                # Additional stealth settings
-                proxy={
-                    'server': 'http://proxy-server.example.com:8080',  # Configure your proxy
-                    'username': 'user',
-                    'password': 'pass',
-                } if hasattr(self.config, 'proxy') and self.config.proxy else None,
-                device_scale_factor=random.uniform(1, 2),  # Random device scale
-                reduced_motion='reduce',  # Reduce motion to avoid detection
-                force_color_profile='srgb',  # Use standard color profile
+                bypass_csp=True,
+                geolocation={'latitude': 40.7128, 'longitude': -74.0060},
             )
 
-            # Apply stealth measures to the context
-            await context.add_init_script("""
-                // Override navigator properties
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            # Add script to modify navigator properties
+            await self.context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [
+                        {
+                            name: 'Chrome PDF Plugin',
+                            description: 'Portable Document Format',
+                            filename: 'internal-pdf-viewer'
+                        }
+                    ]
+                });
             """)
 
-        # Apply stealth measures to new pages
-        context.on("page", self._handle_new_page)
-
-        return context
-
-    async def _handle_new_page(self, page: Page):
-        """Apply stealth measures to newly created pages"""
-        await self.stealth.apply_stealth(self.session.context, page)
-
-    async def _click_element_node(self, element_node: DOMElementNode) -> Optional[str]:
-        """Enhanced click with random delays and human-like behavior"""
-        try:
-            # Add random delay before clicking
-            await self.stealth.random_delay()
-            
-            element_handle = await self.get_locate_element(element_node)
-            
-            if element_handle is None:
-                raise Exception(f'Element: {repr(element_node)} not found')
-
-            # Simulate human-like mouse movement
-            page = await self.get_current_page()
-            
-            # Random offset within element boundaries
-            box = await element_handle.bounding_box()
-            if box:
-                x_offset = random.uniform(5, box['width'] - 5)
-                y_offset = random.uniform(5, box['height'] - 5)
-                
-                # Move mouse with realistic acceleration
-                await page.mouse.move(
-                    box['x'] + x_offset,
-                    box['y'] + y_offset,
-                    steps=random.randint(5, 10)  # Random steps for natural movement
-                )
-
-            # Rest of the original click logic...
-            return await super()._click_element_node(element_node)
+            return self.context
 
         except Exception as e:
-            raise Exception(f'Failed to click element: {repr(element_node)}. Error: {str(e)}')
+            logger.error(f"Error creating stealth context: {str(e)}")
+            await self.cleanup()
+            raise
 
-    async def _input_text_element_node(self, element_node: DOMElementNode, text: str):
-        """Enhanced text input with human-like typing behavior"""
+    async def random_delay(self, min_seconds: float = 1, max_seconds: float = 3):
+        """Add random delay to mimic human behavior"""
+        delay = random.uniform(min_seconds, max_seconds)
+        await asyncio.sleep(delay)
+        return delay
+
+    async def human_like_typing(self, element, text: str):
+        """Type text with random delays between keystrokes"""
+        for char in text:
+            await element.type(char, delay=random.randint(50, 150))
+            await self.random_delay(0.1, 0.3)
+
+    async def login_to_gmail(self, email: str, password: str):
+        """Perform Gmail login with stealth measures"""
         try:
-            element_handle = await self.get_locate_element(element_node)
+            self.page = await self.context.new_page()
             
-            if element_handle is None:
-                raise BrowserError(f'Element: {repr(element_node)} not found')
+            # Navigate to Gmail
+            logger.info("Navigating to Gmail...")
+            await self.page.goto('https://gmail.com', wait_until='networkidle')
+            await self.random_delay()
 
-            # Random initial delay
-            await self.stealth.random_delay()
-
-            # Get element properties
-            tag_handle = await element_handle.get_property('tagName')
-            tag_name = (await tag_handle.json_value()).lower()
+            # Handle email input
+            logger.info("Entering email...")
+            email_input = await self.page.wait_for_selector('input[type="email"]')
+            await self.human_like_typing(email_input, email)
+            await self.random_delay()
             
-            # Clear existing text with random backspaces
-            current_value = await element_handle.input_value()
-            if current_value:
-                for _ in current_value:
-                    await element_handle.press('Backspace')
-                    await asyncio.sleep(random.uniform(0.01, 0.03))
+            # Click next after email
+            await self.page.click('#identifierNext')
+            await self.random_delay(2, 4)
 
-            # Type text with random delays between characters
-            for char in text:
-                await element_handle.type(char, delay=random.uniform(50, 150))
-                
-                # Occasional longer pause
-                if random.random() < 0.1:
-                    await asyncio.sleep(random.uniform(0.1, 0.3))
+            # Handle password input
+            logger.info("Entering password...")
+            password_input = await self.page.wait_for_selector('input[type="password"]', timeout=5000)
+            await self.human_like_typing(password_input, password)
+            await self.random_delay()
 
-            # Random delay after typing
-            await self.stealth.random_delay()
+            # Click next after password
+            await self.page.click('#passwordNext')
+
+            # Wait for Gmail to load
+            logger.info("Waiting for Gmail to load...")
+            await self.page.wait_for_selector('div[role="main"]', timeout=10000)
+            logger.info("Successfully logged into Gmail")
+
+            # Add additional wait time to ensure everything loads
+            await self.random_delay(3, 5)
 
         except Exception as e:
-            logger.debug(f'❌  Failed to input text into element: {repr(element_node)}. Error: {str(e)}')
-            raise BrowserError(f'Failed to input text into index {element_node.highlight_index}')
+            logger.error(f"Error during login: {str(e)}")
+            raise
+
+    async def cleanup(self):
+        """Clean up browser resources"""
+        if self.page:
+            await self.page.close()
+        if self.context:
+            await self.context.close()
+        if self.playwright_browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+
+async def main():
+    gmail_browser = GmailStealthBrowser()
+    await gmail_browser.get_playwright_browser()
+    try:
+        # Create stealth context
+        await gmail_browser.create_stealth_context()
+        
+        # Replace with your credentials
+        email = "amanragu2002@gmail.com"
+        password = "your-password"
+        
+        # Perform login
+        await gmail_browser.login_to_gmail(email, password)
+        
+        # Keep the browser open for a while
+        await asyncio.sleep(5)
+        
+    except Exception as e:
+        logger.error(f"Main execution error: {str(e)}")
+    finally:
+        await gmail_browser.cleanup()
+
+if __name__ == "__main__":
+    asyncio.run(main())

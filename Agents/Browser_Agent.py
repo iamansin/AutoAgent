@@ -1,3 +1,4 @@
+from re import S
 from browser_use import Agent, Browser, BrowserConfig
 from browser_use.browser.context import BrowserContextConfig, BrowserContext
 from typing import Optional, Union, Dict, Any, List, Tuple
@@ -7,11 +8,12 @@ import logging
 from datetime import datetime
 import uuid
 from langchain.chat_models.base import BaseChatModel
-from Utils.CustomBrowserContext import ExtendedBrowserContext
+from Utils.stealth_browser.brower_context import StealthBrowser
+# from Utils.CustomBrowserContext import ExtendedBrowserContext
 from .custom_controllers.base_controller import ControllerRegistry
 from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot
-from .prompts import MySystemPrompt
-# Set up logging
+from Utils.prompts import MySystemPrompt
+from Utils.stealth_browser.CustomBrowserContext import ExtendedContext# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -48,6 +50,8 @@ class BrowserAgentHandler:
         use_planner_model : bool = False,
         planner_model : str = None,
         on_step_screenshot : bool = True,
+        current_context = None,
+        enable_memory: bool = True,
         log_dir: str = "logs"
     ):
         """
@@ -67,15 +71,17 @@ class BrowserAgentHandler:
             
         self._max_browsers = max_browsers
         self._max_contexts_per_browser = max_contexts_per_browser
-        self._browser_config = browser_config if browser_config else BrowserConfig()
-        self._context_config = context_config if context_config else BrowserContextConfig()
+        self._browser_config = browser_config 
+        self._context_config = context_config 
         self._ss_interval = ss_interval
         self._custom_controller = custom_controller
+        self.use_memory = enable_memory
         self._log_dir = log_dir
         self._llm_dict =  llm_dict
         self._llm = [model for model in llm_dict.values()][0]
         # Map of browser instances and their contexts
         # {browser_id: {"browser": Browser, "contexts": {context_id: context_obj}}}
+        self._current_context = current_context
         self._browsers = {}
         
         # Map of context_id to browser_id
@@ -91,7 +97,7 @@ class BrowserAgentHandler:
         self.planner_model = planner_model
         self._on_step_screenshot = on_step_screenshot
         # Create logs directory if it doesn't exist
-        os.makedirs(self._log_dir, exist_ok=True)
+        # os.makedirs(self._log_dir, exist_ok=True)
         
         self._initialized = True
         logger.info(f"BrowserAgentHandler initialized with max {max_browsers} browsers, "
@@ -114,7 +120,9 @@ class BrowserAgentHandler:
             browser_id = str(uuid.uuid4())
             logger.info(f"Creating new browser with ID: {browser_id}")
             
-            browser = Browser(self._browser_config)
+            browser = StealthBrowser()
+
+            logger.info("Using GmailStealthBrowser!!!")
             self._browsers[browser_id] = {
                 "browser": browser,
                 "contexts": {}
@@ -170,22 +178,30 @@ class BrowserAgentHandler:
             logger.info(f"Creating context {context_id} in browser {browser_id}")
             
             # Create browser context
-            browser = self._browsers[browser_id]["browser"]
+            browser : StealthBrowser = self._browsers[browser_id]["browser"]
             
             if self._on_step_screenshot:
-                context = BrowserContext(browser=browser,config=self._context_config)
+                # current_context = browser.create_stealth_context()
+                context = ExtendedContext(browser=browser,
+                                          config=self._context_config)
+                                        #   current_context=current_context)
+                logger.warning("Using Current context by Stealth Browser")
+                # context = BrowserContext(
+                #     browser=browser,
+                #     config=self._context_config
+                # )
                 
-            else:
-                context = ExtendedBrowserContext(
-                    browser=browser,
-                    config=self._context_config,
-                    screenshot_dir=f"agent_screenshots/{context_id}",
-                    screenshot_interval=self._ss_interval,
-                    transmit=False,
-                    debug_level=logging.WARNING
-                )
-                logger.info(f"Now intialising BrowserContext : {context_id or 101}")
-                await context.initialize()
+            # else:
+            #     context = ExtendedBrowserContext(
+            #         browser=browser,
+            #         config=self._context_config,
+            #         screenshot_dir=f"agent_screenshots/{context_id}",
+            #         screenshot_interval=self._ss_interval,
+            #         transmit=False,
+            #         debug_level=logging.WARNING
+            #     )
+            #     logger.info(f"Now intialising BrowserContext : {context_id or 101}")
+            #     await context.initialize()
                 
             # Store context references
             self._browsers[browser_id]["contexts"][context_id] = context
@@ -201,7 +217,7 @@ class BrowserAgentHandler:
                 del self._input_queues[context_id]
             raise RuntimeError(f"Context creation failed: {e}")
     
-    async def get_context(self, context_id: str) -> Optional[ExtendedBrowserContext]:
+    async def get_context(self, context_id: str):
         """
         Get a browser context by ID.
         
@@ -224,7 +240,8 @@ class BrowserAgentHandler:
         context_id: str,
         task: str,
         use_vision: bool = True,
-        agent_kwargs: Optional[Dict[str, Any]] = None
+        agent_kwargs: Optional[Dict[str, Any]] = None,
+        sensitive_data= None,
     ) -> Agent:
         """
         Create a Browser-Use agent for a specific context.
@@ -269,13 +286,18 @@ class BrowserAgentHandler:
                 
             if self._use_planner_model:
                 if self.planner_model:
+                    print("Using Planner Agent!!!!")
                     kwargs["planner_llm"] = self._llm_dict[self.planner_model]
                 else:
                     print("There is no planner model name provided; using the main model as planner!")
                     kwargs["planner_llm"] = next(iter(self._llm_dict.values()))
                     
             if self._on_step_screenshot:
+                
                 kwargs["register_new_step_callback"] = on_step_screenshot
+                
+            if sensitive_data: 
+                kwargs["sensitive_data"] = sensitive_data
                     
             if agent_kwargs:
                 kwargs.update(agent_kwargs)
@@ -299,7 +321,8 @@ class BrowserAgentHandler:
         task: Optional[str] = None,
         use_vision: bool = True,
         timeout: Optional[float] = None,
-        agent_kwargs: Optional[Dict[str, Any]] = None
+        agent_kwargs: Optional[Dict[str, Any]] = None,
+        sensitive_data : Dict[str,Any] = None 
     ) -> Any:
         """
         Run a task with an existing or new agent for the specified context.
@@ -330,7 +353,8 @@ class BrowserAgentHandler:
                     context_id=context_id,
                     task=task,
                     use_vision=use_vision,
-                    agent_kwargs=agent_kwargs
+                    agent_kwargs=agent_kwargs,
+                    sensitive_data =sensitive_data
                 )
 
             # Run the agent with timeout if specified
@@ -378,8 +402,8 @@ class BrowserAgentHandler:
                 if context_id in self._context_to_agent:
                     del self._context_to_agent[context_id]
                     
-                if context_id in self._input_queues:
-                    del self._input_queues[context_id]
+                # if context_id in self._input_queues:
+                #     del self._input_queues[context_id]
                     
                 logger.info(f"Context {context_id} closed and resources cleaned up")
                 return True

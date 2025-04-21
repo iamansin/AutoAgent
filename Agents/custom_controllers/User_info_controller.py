@@ -71,8 +71,8 @@ async def get_user_input(prompt: str, session_id : str) -> str:
     # Send a user input request via WebSocket
     # response = await ws_manager.request_user_input(prompt, session_id)
     # return response
-    print(prompt)
-    response = input("Enter you response here: ")
+    # print(prompt)
+    response = input(f"Need Your input for :: {prompt} ->")
     return response
 
 

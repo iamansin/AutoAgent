@@ -6,13 +6,14 @@ from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from browser_use import Agent, Browser, BrowserConfig, Controller, ActionResult
-from browser_use.browser.context import BrowserContextConfig
+from browser_use.browser.context import BrowserContextConfig, BrowserContext
 from Agents import custom_controllers
-from Agents.prompts import MySystemPrompt
-from Utils.CustomBrowser import StealthBrowser, StealthBrowserConfig
+from Utils.prompts import MySystemPrompt
+from Utils.stealth_browser.CustomBrowser import StealthBrowser, StealthBrowserConfig
+from Utils.stealth_browser.CustomBrowserContext import ExtendedContext
 # from Utils.CustomBrowserContext import ExtendedBrowserContext
 # from Agents.custom_controllers.Interrup_controller import get_human_in_loop, HumanInput
-from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot, take_screenshot
+from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot
 # Configure basic logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,14 +44,23 @@ llm = ChatGoogleGenerativeAI(
 
 # Create Browser and Context objects
 # browser = Browser(config=browser_config)
-config = StealthBrowserConfig(
-            headless=False,
-            locale="en-US",
-            timezone_id="America/New_York",
-            viewport={"width": 1920, "height": 1080},
-            minimum_wait_page_load_time=1.0
-        )
-browser = StealthBrowser(config)
+# config = StealthBrowserConfig(
+#             headless=False,
+#             locale="en-US",
+#             timezone_id="America/New_York",
+#             viewport={"width": 1920, "height": 1080},
+#             minimum_wait_page_load_time=1.0
+
+browser_config = BrowserConfig(
+    chrome_instance_path="C:\Program Files\Google\Chrome\Application\chrome.exe",
+    
+)
+#         )
+browser =  Browser(config=browser_config)
+context = BrowserContext(browser=browser)
+# context = ExtendedContext(
+#     browser=browser
+# )
 
 # context = ExtendedBrowserContext(
 #     browser=browser, 
@@ -70,7 +80,7 @@ browser = StealthBrowser(config)
 #                                   )
 
 # custom_controller = registry.get_controller()
-custom_controller = Controller()
+# custom_controller = Controller()
 
 
 
@@ -78,10 +88,9 @@ async def run_search(task1: str):
     try:
         # Initialize context
         # await context.initialize()
-        context = await browser.new_context()
+        # context = await browser.new_context()
         # Create and run first agent
         agent1 : Agent = Agent(
-            controller=custom_controller,
             browser_context= context,
             task=task1,
             system_prompt_class=MySystemPrompt,

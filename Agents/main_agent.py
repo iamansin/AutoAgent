@@ -2,6 +2,7 @@ import asyncio
 from doctest import UnexpectedException
 import json
 import logging
+from re import L
 from shutil import ExecError
 from typing import Awaitable, Dict, List, Any, Optional, Tuple, Union, Callable
 import httpx
@@ -15,10 +16,9 @@ from langgraph.graph.graph import CompiledGraph
 from langchain_core.messages import HumanMessage, AIMessage
 # from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
-from .prompts import (
+from Utils.prompts import (
     THINKER_PROMPT,
     INITIALEXEPROMPT,
-    REPEATEDEXEPROMPT,
     EXEPROMPT,
     TASK_INSTRUCTIONS
 )
@@ -35,18 +35,21 @@ from .Browser_Agent import BrowserAgentHandler
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("AutoAgent")
 
-
+class NextInstruction(BaseModel):
+    instruction : str = Field(description="This field contains the new instruction that should be taken")
+    
 class InterruptionContext(BaseModel):
     interrup : bool
-    next_step : Optional[str] = None
     question : Optional[str] = None
 
 class ExeActionStruct(BaseModel):
-    interruption_context : InterruptionContext
+    current_task_completed : bool 
+    user_task_completed : bool
+    next_step : Optional[str] = None
     final_response : Optional[str] = None
 
 class ActionOutputStruct(BaseModel):
-    instructions : str
+    instructions : List[str]
 
 class ProcessContext(BaseModel):
     process_history : List[str] = Field(default_factory=list)
@@ -58,6 +61,7 @@ class AutoAgentState(BaseModel):
     thoughts: List[str] = Field(default_factory=list)
     routes: Dict[str,List[str]] = Field(default_factory=dict)
     route_config : Dict[str,RouteConfig] =Field(default_factory=dict)
+    sensitive_data : Optional[Dict] = None
     research_results: List[str] = Field(default_factory=list)
     tasks: List[Task] = Field(default_factory=list)
     send_list : Dict[str, List[InternalState]] = Field(default_factory=dict)
@@ -81,13 +85,13 @@ class AutoAgent:
         llm_dict :Dict[str,Any],
         fallback_llm : str = None,
         browser_agent : BrowserAgentHandler = None,
-        max_steps : int = 100,
+        max_steps : int = 10,
         search_api_key: Optional[str] = None,
         search_engine: str = "duckduckgo",
         max_search_results: int = 10,
         timeout: int = 30,
         max_retries: int = 3,
-        verbose: bool = False
+        verbose: bool = False,
     ):
         """
         Initialize the AutoAgent class.
@@ -109,7 +113,7 @@ class AutoAgent:
         self.timeout = timeout
         self.max_retries = max_retries
         self.verbose = verbose
-        self._loop_steps = max_steps
+        self._max_steps = max_steps
         self.LLMHandler = StructuredLLMHandler(llm_dict=llm_dict, 
                                                fallback_llm=fallback_llm)
         self._Router :Router = Router(name = "autoagent")
@@ -135,14 +139,14 @@ class AutoAgent:
         # Define edges
         workflow.add_conditional_edges("thinker", self._Router.get_routing_function("thinker"))
         workflow.add_conditional_edges("executor", self._Router.get_routing_function("executor"))
-        workflow.add_edge("human_input", "executor")
-        # workflow.add_edge("researcher", "validator")
+        # workflow.add_edge("human_input", "executor")
+        # workflow.add_edge(["researcher", "executor"], "validator")
         # workflow.add_edge(["executor", "researcher"], END)
         # workflow.add_edge("thinker", END)
         
         # Set the entry point
         workflow.set_entry_point("thinker")
-         
+        
         # Compile the workflow
         return workflow.compile()
     
@@ -159,8 +163,7 @@ class AutoAgent:
         logger.info(f"Thinking about query: {state.user_task}")
         
         try:
-            user_task = state.user_task
-            
+            user_task  = state.user_task
             response : ThinkerOutputStruct = await self.LLMHandler.get_structured_response(
                     prompt=THINKER_PROMPT, 
                     output_structure=ThinkerOutputStruct,
@@ -588,96 +591,134 @@ class AutoAgent:
         """
         logger.info("Executing validated tasks")
         
-        step = state.step
+        # step = state.step
         context_id = state.context_id
         task =  state.tasks[-1].task_description
-        waiting = state.waiting
-        kwargs = {"task" : task}
+        # waiting = state.waiting
+        # kwargs = {"task" : task}
+        sensitive_data = state.sensitive_data
+        instruction_context = {
+            "instruction" : [None,],
+            "agent_response" : [None,],
+            "next_step" : [None,]
+        }
+        step = 0
+        failure = 0
+        max_failures = 2
         try:
+            while step <= self._max_steps and failure <= max_failures:
+                response : ActionOutputStruct= await self.LLMHandler.get_structured_response(
+                            prompt=INITIALEXEPROMPT, 
+                            output_structure=ActionOutputStruct,
+                            use_model="google",
+                            task = task,
+                            previous_step = instruction_context.get("instruction")[-1],
+                            agent_response = instruction_context.get("agent_response")[-1],
+                            next_action_hint = instruction_context.get("next_step")[-1]
+                            )
+                    
+                instruction = response.instructions
+                print(f"This is the main instruction for current step : --------->{instruction}")
+                    # instructions = task
+                try:
+                    try:
+                        response_history = await self.BrowserAgent.run_task(
+                                        context_id=context_id,
+                                        task = f"{instruction} \n {TASK_INSTRUCTIONS}",
+                                        use_vision=True,
+                                        sensitive_data=sensitive_data)
+                    except Exception as e:
+                        break 
+                            
+                    step += 1
+                    browser_response = response_history.final_result()
+                    print(f"Current browser response ----------> {browser_response}")
+                    validation_response : ExeActionStruct = await self.LLMHandler.get_structured_response(
+                                        prompt=EXEPROMPT, 
+                                        output_structure=ExeActionStruct,
+                                        use_model="google",
+                                        task = task,
+                                        current_instruction= instruction,
+                                        browser_response = browser_response
+                                        )
+                    
+                    if validation_response.user_task_completed:
+                                print("Task is completed!!!")
+                                state.results = validation_response.final_response
+                                print(f"Final Response {validation_response.final_response}")
+                                state.routes["executor"] = [END]
+                                state.route_config["executor"] = RouteConfig(
+                                        from_node="executor",
+                                        conditional_nodes=[END]
+                                    )
+                                return state   
+                            
+                    else:
+                        if not validation_response.current_task_completed:
+                            failure += 1
+                        print(f"Next action --------------> {validation_response.next_step}")
+                        instruction_context.get("instruction").append(instruction)
+                        instruction_context.get("agent_response").append(browser_response)
+                        instruction_context.get("next_step").append(validation_response.next_step)
+                        continue
             
-            if waiting and step < self._loop_steps:
-                process_context : ProcessContext = state.process_context
-                kwargs["_process_history"] = process_context.process_history
-                user_input = state.input
-                    
-                response : ActionOutputStruct = await self.LLMHandler.get_structured_response(
-                        prompt=REPEATEDEXEPROMPT, 
-                        output_structure=ActionOutputStruct,
-                        use_model="google",
-                        task = task,
-                        _process_history = "Step : ".join(process_context.process_history),
-                        _next_step = process_context.next_step,
-                        user_input = json.dumps(user_input))
-                
-                instructions = response.instructions
-                    
-            else:
-                # response : ActionOutputStruct= await self.LLMHandler.get_structured_response(
-                #         prompt=INITIALEXEPROMPT, 
-                #         output_structure=ActionOutputStruct,
-                #         use_model="google",
-                #         task = task )
-                
-                # instructions = response.instructions
-                instructions = task
+                except Exception as e:
+                    logger.error(
+                    f"[{state.context_id}] Task execution failed: {str(e)}\n"
+                    f"Traceback: {traceback.format_exc()}"
+                    )
+                    break
 
-            response_history = await self.BrowserAgent.run_task(
-                    context_id=context_id,
-                    task = f"{TASK_INSTRUCTIONS} \n {instructions}",
-                    use_vision=True)
-                    
-            try:
-                browser_response = response_history.final_result()
-            except IndexError:
-                browser_response = response_history.errors()
-                logger.warning(f"Got some error while Browser Agent Execution : {browser_response}")
-                
-            kwargs["_browser_response"] = browser_response
-            logger.info(f"Browser Response : {browser_response}")
-            next_action : ExeActionStruct = await self.LLMHandler.get_structured_response(
-                        prompt=EXEPROMPT, 
-                        output_structure=ExeActionStruct,
-                        use_model="google",
-                        **kwargs
-                        )
-                    
-            if next_action.interruption_context.interrup:
-                #Updating state
-                if not state.process_context:
-                    state.process_context = ProcessContext(
-                        process_history=[instructions],
-                        next_step=next_action.interruption_context.next_step)
-                else:
-                    state.process_context.process_history.append(instructions)
-                    state.process_context.next_step = next_action.interruption_context.next_step
-                state.question = next_action.interruption_context.question
-                state.waiting = True
-                state.routes["executor"] = ["human_input"]
-                state.route_config["executor"] = RouteConfig(
-                    from_node="executor",
-                    conditional_nodes=["humman_input"]
-                )
-                
-                    
-            else:
-                state.results = next_action.final_response
-                state.routes["executor"] = [END]
-                state.route_config["executor"] = RouteConfig(
+            state.routes["executor"] = [END]
+            state.route_config["executor"] = RouteConfig(
                     from_node="executor",
                     conditional_nodes=[END]
                 )
-                
-            state.step += 1 
-            return state   
-        
+            return state
         except Exception as e:
-            logger.error(
-                f"[{state.context_id}] Task execution failed: {str(e)}\n"
-                f"Traceback: {traceback.format_exc()}"
-            )
-            raise e
+            raise e       
+                        
+                # if next_action.interruption_context.interrup:
+                #     #Updating state
+                #     if not state.process_context:
+                #         state.process_context = ProcessContext(
+                #             process_history=[instructions],
+                #             next_step=next_action.interruption_context.next_step)
+                #     else:
+                #         state.process_context.process_history.append(instructions)
+                #         state.process_context.next_step = next_action.interruption_context.next_step
+                #     state.question = next_action.interruption_context.question
+                #     state.waiting = True
+                #     state.routes["executor"] = ["human_input"]
+                #     state.route_config["executor"] = RouteConfig(
+                #         from_node="executor",
+                #         conditional_nodes=["humman_input"]
+                #     )
+                    
+                        
+                # else:
+
+            
+            # if waiting and step < self._loop_steps:
+            #     process_context : ProcessContext = state.process_context
+            #     kwargs["_process_history"] = process_context.process_history
+            #     user_input = state.input
+                    
+            #     response : ActionOutputStruct = await self.LLMHandler.get_structured_response(
+            #             prompt=REPEATEDEXEPROMPT, 
+            #             output_structure=ActionOutputStruct,
+            #             use_model="google",
+            #             task = task,
+            #             _process_history = "Step : ".join(process_context.process_history),
+            #             _next_step = process_context.next_step,
+            #             user_input = json.dumps(user_input))
+                
+            #     instructions = response.instructions
+                    
+            # else:
+
         
-    async def run(self, user_task: str,context_id :str) -> Dict[str, Any]:
+    async def run(self, user_task: str,context_id :str, sensitive_data : Dict =None) -> Dict[str, Any]:
         """
         Run the agent on a given query.
         
@@ -692,16 +733,18 @@ class AutoAgent:
             initial_state = AutoAgentState(
                 user_task=user_task,
                 messages=[HumanMessage(content=user_task)],
-                context_id=context_id
+                context_id=context_id,
+                sensitive_data= sensitive_data
             )
             
             # Run the workflow
             try:
                 final_state = await self.workflow.ainvoke(initial_state)
-            
             except Exception as e:
                 raise e
             
+            print("Now closing context")
+            await self.BrowserAgent.close_context(context_id=context_id)
             return final_state
         
         except Exception as e:
