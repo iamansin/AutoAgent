@@ -7,8 +7,10 @@ from Agents.main_agent import AutoAgent, AutoAgentState
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from browser_use import BrowserConfig
+from Utils.stealth_browser.CustomBrowser import StealthBrowser
 from browser_use.browser.context import BrowserContextConfig
+from browser_use import BrowserConfig
+from browser_use.agent.views import AgentHistoryList, AgentHistory, AgentState
 import os 
 import asyncio
 from langgraph.checkpoint.memory import InMemorySaver
@@ -35,17 +37,16 @@ openai_llm = ChatOpenAI(
 )
 
 llm_dict = {"google" : google_llm, "openai" : openai_llm}
-browser_config = BrowserConfig(headless=False,
-                               disable_security=False)
-                            #    chrome_instance_path=Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"))
+browser_config = BrowserConfig(headless=True)
+#    chrome_instance_path=Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"))
 
 context_config = BrowserContextConfig(
     cookies_file="./browser-data/Cookies/cookies.json",
     wait_for_network_idle_page_load_time=3.0,
-    browser_window_size={'width': 1500, 'height': 1080},
+    browser_window_size={'width': 1920, 'height': 1080},
     locale='en-US',
     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
-    highlight_elements=True,
+    highlight_elements=False,
     viewport_expansion=500,
 )
 
@@ -65,6 +66,7 @@ browser_agent = BrowserAgentHandler(
     custom_controller=controller,
     use_planner_model=False,
     planner_model="google",
+    use_agent_state=True
 )
 
 autoagent = AutoAgent(
@@ -104,5 +106,4 @@ query =  input("Enter Task that you want to perform: ")
     
 asyncio.run(test_agent(query))
 
-#can you please explain me the main logic here in this service.py, actually im encoutring some problem with my browser agent as it is not able to fully understand what im saying and i can feel that some how it;s because of the memory of the agent, this is the memory implementation and im trying to understand what can be the reason of inefficiency becasue of the memory usage. 
-#Can you please look at this code and tell me any problems that can cause inefficiency in memory usage by the LLM
+# send a mail to amanragu22002@gmail.com with subject : "sabbotical for 3 months"

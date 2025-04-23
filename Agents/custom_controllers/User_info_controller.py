@@ -34,6 +34,11 @@ class InfoStructure(BaseModel):
     prompt : Optional[str] = None
     required_info : Optional[str] = None
  
+class ResponseStructure(BaseModel):
+    info_suff : bool
+    debug_prompt : Optional[str] = None
+    refined_prompt : Optional[str] = None
+    
 USER_INFO = {
     "10" : {
         "username" : "Aman Singh",
@@ -63,6 +68,39 @@ and also prompt the user for the information that is required.
 }}
 """)
 
+USER_RESPONSE_PROMPT = dedent("""
+You are a highly intelligent Agentic Thinker integrated within a Browser Agent that handles advanced web tasks. In the current interaction, you are provided with an Agent Prompt and a corresponding User Input. Your task is to evaluate and process the provided information according to the instructions below:
+
+Context:
+- Agent Prompt: {agent_prompt}
+- User Input: {user_input}
+
+Your Goals:
+1. Analyze both the Agent Prompt and the User Input.
+2. Determine if the User Input provides the specific information requested by the Agent Prompt:
+   - If the User Input meets the requirements, set "info_suff" to true.
+   - If the User Input is incomplete, irrelevant, or does not meet the requested details, set "info_suff" to false.
+3. If "info_suff" is false, generate a clear and precise "debug_prompt" that explains the detailed information needed from the user.
+4. If the User Input includes additional requests (for example, asking for an enhanced version or irrelevant modifications), instruct the user to focus on providing the required information.
+5. **DO NOT HALLUCINATE**: Use only the given information from the Agent Prompt and the User Input. Do not invent any details or add extraneous information.
+
+Output:
+Return a JSON object adhering strictly to the following structure:
+```json
+{{
+  "info_suff": <bool>,
+  "debug_prompt": <string or None>,
+  "refined_input": <string ot None>
+}}
+```
+Where:
+- "info_suff": true if the User Input fully meets the requirements from the Agent Prompt; otherwise, false.
+- "debug_prompt": null if "info_suff" is true, or a detailed prompt clarifying the additional information needed if "info_suff" is false.
+- "refined_input": a refined version of the User Input that retains its intended meaning while correcting errors if necessary.
+
+Proceed with processing by evaluating the provided Agent Prompt and User Input and return the result in the specified format.
+""")
+
 
 async def get_stored_info(user_id :str):
     return USER_INFO[user_id] 
@@ -72,8 +110,30 @@ async def get_user_input(prompt: str, session_id : str) -> str:
     # response = await ws_manager.request_user_input(prompt, session_id)
     # return response
     # print(prompt)
-    response = input(f"Need Your input for :: {prompt} ->")
-    return response
+    llm_response = None
+    while True:
+        user_response = input(f"Need Your input for :: {llm_response if llm_response else prompt} ->")
+        parser = PydanticOutputParser(pydantic_object=ResponseStructure)
+        llm_prompt = PromptTemplate(
+                template=USER_RESPONSE_PROMPT,
+                partial_variables={"format_instructions": parser.get_format_instructions()}
+            )
+        message = llm_prompt.format(agent_prompt=prompt, user_input = user_response )
+        
+        try:
+            structured_llm = google_llm.with_structured_output(ResponseStructure)
+            response: ResponseStructure= await structured_llm.ainvoke(message)
+            if response.info_suff:
+                if response.refined_prompt :
+                    return response.refined_prompt
+                else:
+                    return user_response
+            
+            llm_response = response.debug_prompt
+            
+        except Exception as e:
+            raise e
+
 
 
 async def get_user_info(params: ModelPrompt) -> ActionResult:

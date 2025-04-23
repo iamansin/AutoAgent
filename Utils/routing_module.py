@@ -6,7 +6,7 @@ import logging
 from functools import wraps
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 LOGGER = logging.getLogger(__name__)
 
 class RouterException(Exception):
@@ -137,9 +137,9 @@ class Router:
                     )
                 
 
-                LOGGER.debug(
-                    f"Routing from {config.from_node} to nodes: {next_nodes}"
-                )
+                # LOGGER.debug(
+                #     f"Routing from {config.from_node} to nodes: {next_nodes}"
+                # )
                 return next_nodes
 
             except Exception as e:
@@ -183,7 +183,7 @@ class Router:
             routing_func = cls._create_routing_function(from_node)
             cls._route_registry[from_node] = routing_func
 
-            LOGGER.info(f"Successfully created router for {from_node}")
+            # LOGGER.info(f"Successfully created router for {from_node}")
             return routing_func
 
         except Exception as e:
@@ -201,4 +201,4 @@ class Router:
         """Clear all registered routes and configurations"""
         cls._route_registry.clear()
         cls._route_configs.clear()
-        LOGGER.info("Cleared all routes and configurations")
+        # LOGGER.info("Cleared all routes and configurations")

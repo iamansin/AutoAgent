@@ -17,7 +17,7 @@ from browser_use.browser.views import (
 from browser_use.utils import time_execution_async, time_execution_sync
 from typing_extensions import Optional
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 class ExtendedContext(BrowserContext):

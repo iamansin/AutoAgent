@@ -11,7 +11,7 @@ import json
 from enum import Enum
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 LOGGER = logging.getLogger(__name__)
 
 class LLMResponseStatus(Enum):
@@ -269,7 +269,7 @@ class StructuredLLMHandler:
 
         # Try main LLM with retries
         for attempt in range(1, retry_attempts + 1):
-            LOGGER.info(f"Attempt {attempt}/{retry_attempts} with main LLM")
+            # LOGGER.info(f"Attempt {attempt}/{retry_attempts} with main LLM")
             status, response = await self._handle_llm_response(
                 main_model,
                 formatted_prompt,
