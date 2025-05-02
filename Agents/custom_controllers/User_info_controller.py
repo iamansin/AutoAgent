@@ -11,13 +11,14 @@ import logging
 from textwrap import dedent
 import uuid
 # from Utils import structured_llm
-from Utils.websocket_manager import  ws_manager, WebSocketMessage
+# from main import ws_manager
+from Utils.schemas import WebSocketMessage
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("AutoAgent")
 
 load_dotenv()
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
 
 google_llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash-001",
@@ -43,9 +44,12 @@ USER_INFO = {
     "10" : {
         "username" : "Aman Singh",
         "user_phone_number" : "+91-8083343",
+        "user_email" : "amanragu2002@gmail.com",
+        "gender" : "male",
         "preference" : {
             "language" : ["English", "Hindi"]
-        }
+        },
+        
     }
 }
 
@@ -69,70 +73,74 @@ and also prompt the user for the information that is required.
 """)
 
 USER_RESPONSE_PROMPT = dedent("""
-You are a highly intelligent Agentic Thinker integrated within a Browser Agent that handles advanced web tasks. In the current interaction, you are provided with an Agent Prompt and a corresponding User Input. Your task is to evaluate and process the provided information according to the instructions below:
+You are a highly intelligent Agentic Thinker integrated within a Browser Agent that handles advanced web tasks. In the current interaction, you are provided with two pieces of information:
 
-Context:
-- Agent Prompt: {agent_prompt}
-- User Input: {user_input}
+1. Agent Prompt: {agent_prompt}
+2. User Input: {user_input}
 
-Your Goals:
+Your task is to:
 1. Analyze both the Agent Prompt and the User Input.
-2. Determine if the User Input provides the specific information requested by the Agent Prompt:
-   - If the User Input meets the requirements, set "info_suff" to true.
-   - If the User Input is incomplete, irrelevant, or does not meet the requested details, set "info_suff" to false.
-3. If "info_suff" is false, generate a clear and precise "debug_prompt" that explains the detailed information needed from the user.
-4. If the User Input includes additional requests (for example, asking for an enhanced version or irrelevant modifications), instruct the user to focus on providing the required information.
-5. **DO NOT HALLUCINATE**: Use only the given information from the Agent Prompt and the User Input. Do not invent any details or add extraneous information.
+2. Determine whether the User Input sufficiently satisfies the request from the Agent Prompt by providing the necessary content, tone, and details. The User Input may contain both instructions and the actual content.
+3. If the User Input fully meets the Agent Prompt's request and contains the necessary content, set "info_suff" to true.
+4. If the User Input is incomplete, vague, or does not include the specific content requested, set "info_suff" to false.
+5. If "info_suff" is false, generate a brief and clear "debug_prompt" instructing the user on what additional details or corrections are needed.
+6. Optionally, provide a "refined_input" that retains the intended meaning of the User Input while correcting any errors or clarifying the content.
+7. Do not add or hallucinate any extra details; use only the provided Agent Prompt and User Input.
 
-Output:
-Return a JSON object adhering strictly to the following structure:
-```json
+Return ONLY a JSON object that strictly adheres to the following structure:
 {{
   "info_suff": <bool>,
-  "debug_prompt": <string or None>,
-  "refined_input": <string ot None>
+  "debug_prompt": <string or null>,
+  "refined_input": <string or null>
 }}
-```
-Where:
-- "info_suff": true if the User Input fully meets the requirements from the Agent Prompt; otherwise, false.
-- "debug_prompt": null if "info_suff" is true, or a detailed prompt clarifying the additional information needed if "info_suff" is false.
-- "refined_input": a refined version of the User Input that retains its intended meaning while correcting errors if necessary.
 
-Proceed with processing by evaluating the provided Agent Prompt and User Input and return the result in the specified format.
+IMPORTANT:
+- Ensure your output is valid JSON.
+- Your entire response must be in valid JSON format without any additional commentary.
+
+Proceed by evaluating the provided Agent Prompt and User Input, then return the result in the specified JSON structure.
 """)
 
 
 async def get_stored_info(user_id :str):
     return USER_INFO[user_id] 
 
-async def get_user_input(prompt: str, session_id : str) -> str:
+async def get_user_input(prompt: str, session_id : str = "test101") -> str:
+    response = input(f"{prompt} ::")
+    USER_INFO["10"][prompt] = response
+    return response
     # Send a user input request via WebSocket
-    # response = await ws_manager.request_user_input(prompt, session_id)
+    # response = 
     # return response
     # print(prompt)
-    llm_response = None
-    while True:
-        user_response = input(f"Need Your input for :: {llm_response if llm_response else prompt} ->")
-        parser = PydanticOutputParser(pydantic_object=ResponseStructure)
-        llm_prompt = PromptTemplate(
-                template=USER_RESPONSE_PROMPT,
-                partial_variables={"format_instructions": parser.get_format_instructions()}
-            )
-        message = llm_prompt.format(agent_prompt=prompt, user_input = user_response )
+    # llm_response = None
+    # while True:
+    #     try:
+    #         # user_response = await ws_manager.request_user_input(llm_response if llm_response else prompt, session_id)
+    #         user_response = input(f"{llm_response if llm_response else prompt}, Enter your response here:: ")
+    #     except Exception as e:
+    #         print (e)
+    #         break
+    #     parser = PydanticOutputParser(pydantic_object=ResponseStructure)
+    #     llm_prompt = PromptTemplate(
+    #             template=USER_RESPONSE_PROMPT,
+    #             partial_variables={"format_instructions": parser.get_format_instructions()}
+    #         )
+    #     message = llm_prompt.format(agent_prompt=prompt, user_input = user_response )
         
-        try:
-            structured_llm = google_llm.with_structured_output(ResponseStructure)
-            response: ResponseStructure= await structured_llm.ainvoke(message)
-            if response.info_suff:
-                if response.refined_prompt :
-                    return response.refined_prompt
-                else:
-                    return user_response
+    #     try:
+    #         structured_llm = google_llm.with_structured_output(ResponseStructure)
+    #         response: ResponseStructure= await structured_llm.ainvoke(message)
+    #         if response.info_suff:
+    #             if response.refined_prompt :
+    #                 return response.refined_prompt
+    #             else:
+    #                 return user_response
             
-            llm_response = response.debug_prompt
+    #         llm_response = response.debug_prompt
             
-        except Exception as e:
-            raise e
+    #     except Exception as e:
+    #         raise e
 
 
 

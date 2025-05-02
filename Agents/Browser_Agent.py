@@ -1,3 +1,4 @@
+from multiprocessing import context
 from re import S
 from browser_use import ActionResult, Agent, Browser, BrowserConfig
 from browser_use.browser.context import BrowserContextConfig, BrowserContext
@@ -11,15 +12,29 @@ from langchain.chat_models.base import BaseChatModel
 from browser_use.agent.views import AgentState
 from Utils.stealth_browser.CustomBrowser import StealthBrowser
 from .custom_controllers.base_controller import ControllerRegistry
-from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot
+# from Agents.custom_controllers.ScreenShot_controller import on_step_screenshot
 from Utils.prompts import MySystemPrompt
+from Utils.schemas import WebSocketMessage
+import base64
 from Utils.stealth_browser.CustomBrowserContext import ExtendedContext# Set up logging
 logging.basicConfig(
     level=logging.ERROR,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("BrowserAgentHandler")
+# Global configuration variables
+SAVE_DIR = "./agent_screenshots"
+FILENAME_PREFIX = "screenshot"
+INCLUDE_TIMESTAMP = False
+INCLUDE_STEP_NUMBER = True
+QUALITY = 80
+FULL_PAGE = False
+BATCH_FOLDER = None
 
+
+
+
+    
 class BrowserAgentHandler:
     """
     Singleton class that handles browser instances, contexts, and agents.
@@ -40,6 +55,7 @@ class BrowserAgentHandler:
     
     def __init__(
         self,
+        # ws_manager,
         llm_dict : Dict[str, BaseChatModel],
         max_browsers: int = 10,
         max_contexts_per_browser: int = 10,
@@ -52,6 +68,8 @@ class BrowserAgentHandler:
         on_step_screenshot : bool = True,
         current_context = None,
         use_agent_state : Optional[bool] = False,
+        transmit_ss : bool = False,
+        max_steps : int = 25,
         log_dir: str = "logs"
     ):
         """
@@ -68,10 +86,11 @@ class BrowserAgentHandler:
         # Avoid re-initialization if already initialized
         if self._initialized:
             return
-            
+        
+        # self.ws_manager = ws_manager
         self._max_browsers = max_browsers
         self._max_contexts_per_browser = max_contexts_per_browser
-        self._browser_config = browser_config or BrowserConfig()
+        self._browser_config = browser_config 
         self._context_config = context_config or BrowserContextConfig()
         self._ss_interval = ss_interval
         self._custom_controller = custom_controller
@@ -79,6 +98,8 @@ class BrowserAgentHandler:
         self._llm_dict =  llm_dict
         self._llm = [model for model in llm_dict.values()][0]
         self.use_agent_state = use_agent_state
+        self.TRANSMIT = transmit_ss
+        self.max_steps = max_steps
         # Map of browser instances and their contexts
         # {browser_id: {"browser": Browser, "contexts": {context_id: context_obj}}}
         self._current_context = current_context
@@ -119,10 +140,9 @@ class BrowserAgentHandler:
         try:
             browser_id = str(uuid.uuid4())
             logger.info(f"Creating new browser with ID: {browser_id}")
-            
             browser = StealthBrowser(config= self._browser_config)
 
-            logger.info("Using GmailStealthBrowser!!!")
+            logger.info("Using Browser-use Browser!!!")
             self._browsers[browser_id] = {
                 "browser": browser,
                 "contexts": {}
@@ -185,11 +205,11 @@ class BrowserAgentHandler:
                 context = ExtendedContext(browser=browser,
                                           config=self._context_config)
                                         #   current_context=current_context)
-                logger.warning("Using Current context by Stealth Browser")
                 # context = BrowserContext(
                 #     browser=browser,
                 #     config=self._context_config
                 # )
+                logger.warning("Using Current context by Browser-use")
                 
             # else:
             #     context = ExtendedBrowserContext(
@@ -235,10 +255,64 @@ class BrowserAgentHandler:
         browser_id = self._context_to_browser[context_id]
         return self._browsers[browser_id]["contexts"].get(context_id)
     
+    def set_up_callback(self, context_id :str):
+        
+        def setup_directories(batch_folder: Optional[str] = None) -> str:
+            """Set up and return the directory path for saving screenshots."""
+            save_path = SAVE_DIR
+            if batch_folder:
+                save_path = os.path.join(SAVE_DIR, batch_folder)
+            os.makedirs(save_path, exist_ok=True)
+            return save_path
+
+        async def save_and_transmit_screenshot(screenshot_b64: str, step: int, batch_folder: Optional[str] = None) -> bool:
+            """Save screenshot to file and transmit via WebSocket if enabled."""
+            try:
+                if not screenshot_b64:
+                    return False
+
+                save_path = setup_directories(batch_folder)
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                filename = f"{FILENAME_PREFIX}_step{step}_{timestamp}.png"
+                filepath = os.path.join(save_path, filename)
+
+                # Save to file
+                with open(filepath, "wb") as f:
+                    f.write(base64.b64decode(screenshot_b64))
+
+                # Transmit via WebSocket if enabled
+                if self.TRANSMIT:
+                    message = WebSocketMessage(
+                        type="screenshot",
+                        content={
+                            "image": screenshot_b64,
+                            "step": step,
+                            "timestamp": timestamp,
+                            "filename": filename
+                        },
+                        session_id=context_id
+                    )
+                    await self.ws_manager.send_message(message, context_id)
+
+                logger.info(f"Screenshot saved successfully: {filename}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Error processing screenshot at step {step}: {e}")
+                return False
+
+        async def on_step_screenshot(state: Any, model_output: Any, step: int) -> None:
+            """Handle screenshot processing for each step."""
+            if hasattr(state, 'screenshot'):
+                await save_and_transmit_screenshot(state.screenshot, step, BATCH_FOLDER)
+                
+        return on_step_screenshot
+    
     async def create_agent(
         self,
         context_id: str,
         task: str,
+        browser = None,
         use_vision: bool = True,
         agent_kwargs: Optional[Dict[str, Any]] = None,
         sensitive_data= None,
@@ -268,24 +342,25 @@ class BrowserAgentHandler:
         if not context:
             raise ValueError(f"Context {context_id} does not exist")
         
-        # Check if context already has an agent
-        if context_id in self._context_to_agent:
-            raise ValueError(f"Context {context_id} already has an associated agent")
-        
+        # # Check if context already has an agent
+        # if context_id in self._context_to_agent:
+        #     raise ValueError(f"Context {context_id} already has an associated agent")
+
         try:
             # Set up agent kwargs
             kwargs = {
                 "task": task,
                 "llm": self._llm,
                 "use_vision": use_vision,
+                # "browser" : browser,
                 "browser_context": context,
-                "system_prompt_class" : MySystemPrompt,
+                # "system_prompt_class" : MySystemPrompt,
                 # "save_conversation_path" : "logs/conversation"
             }
             
             # Add controller if available
             if self._custom_controller:
-                kwargs["controller"] = self._custom_controller
+                kwargs["controller"] = self._custom_controller 
                 
             if self._use_planner_model:
                 if self.planner_model:
@@ -295,7 +370,7 @@ class BrowserAgentHandler:
                     
             if self._on_step_screenshot:
                 
-                kwargs["register_new_step_callback"] = on_step_screenshot
+                kwargs["register_new_step_callback"] = self.set_up_callback(context_id)
                 
             if sensitive_data: 
                 kwargs["sensitive_data"] = sensitive_data
@@ -326,6 +401,7 @@ class BrowserAgentHandler:
         self,
         context_id: str,
         task: Optional[str] = None,
+        browser = None,
         use_vision: bool = True,
         timeout: Optional[float] = None,
         agent_kwargs: Optional[Dict[str, Any]] = None,
@@ -361,18 +437,20 @@ class BrowserAgentHandler:
             agent = await self.create_agent(
                     context_id=context_id,
                     task=task,
+                    browser=browser,
                     use_vision=use_vision,
                     agent_kwargs=agent_kwargs,
                     sensitive_data =sensitive_data,
                     last_result = last_result,
                     next_action = next_action
                 )
+            
 
             # Run the agent with timeout if specified
             if timeout:
                 result = await asyncio.wait_for(agent.run(max_steps=self.max_steps), timeout=timeout)
             else:
-                result = await agent.run()
+                result = await agent.run(max_steps=self.max_steps)
                 
             logger.info(f"Agent for context {context_id} completed task successfully")
             return result

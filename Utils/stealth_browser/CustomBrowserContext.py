@@ -553,99 +553,161 @@ class ExtendedContext(BrowserContext):
             logger.debug(f'❌  Failed to input text into element: {repr(element_node)}. Error: {str(e)}')
             raise BrowserError(f'Failed to input text into index {element_node.highlight_index}')
         
+        
     @time_execution_async('--click_element_node')
     async def _click_element_node(self, element_node: DOMElementNode) -> Optional[str]:
         """
-        Optimized method to click an element with better compatibility across frameworks.
-        """
-        page = await super().get_current_page()
+		Optimized method to click an element using xpath.
+		"""
+        page = await self.get_current_page()
 
         try:
-            element_handle = await super().get_locate_element(element_node)
+			# Highlight before clicking
+            if element_node.highlight_index is not None:
+                await self._update_state(focus_element=element_node.highlight_index)
+
+            element_handle = await self.get_locate_element(element_node)
 
             if element_handle is None:
                 raise Exception(f'Element: {repr(element_node)} not found')
-
-            # Add minimal delay before clicking
-            await asyncio.sleep(0.2)
-
+            
             async def perform_click(click_func):
                 """Performs the actual click, handling both download
-                and navigation scenarios."""
+				and navigation scenarios."""
                 if self.config.save_downloads_path:
                     try:
-                        # Try short-timeout expect_download to detect a file download has been been triggered
+						# Try short-timeout expect_download to detect a file download has been been triggered
                         async with page.expect_download(timeout=5000) as download_info:
                             await click_func()
                         download = await download_info.value
-                        # Determine file path
+						# Determine file path
                         suggested_filename = download.suggested_filename
-                        unique_filename = await super()._get_unique_filename(self.config.save_downloads_path, suggested_filename)
+                        unique_filename = await self._get_unique_filename(self.config.save_downloads_path, suggested_filename)
                         download_path = os.path.join(self.config.save_downloads_path, unique_filename)
                         await download.save_as(download_path)
-                        logger.debug(f'⬇️  Download triggered. Saved file to: {download_path}')
+                        logger.debug(f'Download triggered. Saved file to: {download_path}')
                         return download_path
                     except TimeoutError:
-                        # If no download is triggered, treat as normal click
+						# If no download is triggered, treat as normal click
                         logger.debug('No download triggered within timeout. Checking navigation...')
                         await page.wait_for_load_state()
-                        await super()._check_and_handle_navigation(page)
+                        await self._check_and_handle_navigation(page)
                 else:
-                    # Standard click logic if no download is expected
+					# Standard click logic if no download is expected
                     await click_func()
                     await page.wait_for_load_state()
-                    await super()._check_and_handle_navigation(page)
+                    await self._check_and_handle_navigation(page)
 
             try:
-                # First ensure element is ready for interaction
-                await element_handle.wait_for_element_state('stable', timeout=2000)
-                # Scroll element into view for more reliable clicking
-                await element_handle.scroll_into_view_if_needed()
-                
-                # Try direct click first - most reliable for standard elements
-                return await perform_click(lambda: element_handle.click(
-                    force=False,  # Don't force click - let Playwright handle visibility checks
-                    delay=10,      # Slight delay for more realistic clicking 
-                    timeout=2000   # Generous timeout
-                ))
+                return await perform_click(lambda: element_handle.click(timeout=1500))
             except URLNotAllowedError as e:
                 raise e
-            except Exception as e:
-                logger.debug(f"Standard click failed: {str(e)}. Trying JS click.")
+            except Exception:
                 try:
-                    # If standard click fails, try JavaScript click
-                    # This works better for some frameworks and custom elements
-                    return await perform_click(lambda: page.evaluate('''(el) => {
-                        // Dispatch proper mouse events before clicking for better compatibility
-                        const rect = el.getBoundingClientRect();
-                        const x = rect.left + rect.width / 2;
-                        const y = rect.top + rect.height / 2;
-                        
-                        // Create and dispatch more realistic events
-                        const mouseOverEvent = new MouseEvent('mouseover', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window,
-                            clientX: x,
-                            clientY: y
-                        });
-                        el.dispatchEvent(mouseOverEvent);
-                        
-                        // Short delay
-                        setTimeout(() => {
-                            // Then click
-                            el.click();
-                        }, 10);
-                    }''', element_handle))
-                except URLNotAllowedError as e:
+                    return await perform_click(lambda: page.evaluate('(el) => el.click()', element_handle))
+                except URLNotAllowedError as e: 
                     raise e
                 except Exception as e:
-                    raise Exception(f'All click methods failed: {str(e)}')
+                    raise Exception(f'Failed to click element: {str(e)}')
 
         except URLNotAllowedError as e:
             raise e
         except Exception as e:
             raise Exception(f'Failed to click element: {repr(element_node)}. Error: {str(e)}')
+
+    # @time_execution_async('--click_element_node')
+    # async def _click_element_node(self, element_node: DOMElementNode) -> Optional[str]:
+    #     """
+    #     Optimized method to click an element with better compatibility across frameworks.
+    #     """
+    #     page = await super().get_current_page()
+
+    #     try:
+    #         element_handle = await super().get_locate_element(element_node)
+
+    #         if element_handle is None:
+    #             raise Exception(f'Element: {repr(element_node)} not found')
+
+    #         # Add minimal delay before clicking
+    #         await asyncio.sleep(0.2)
+
+    #         async def perform_click(click_func):
+    #             """Performs the actual click, handling both download
+    #             and navigation scenarios."""
+    #             if self.config.save_downloads_path:
+    #                 try:
+    #                     # Try short-timeout expect_download to detect a file download has been been triggered
+    #                     async with page.expect_download(timeout=5000) as download_info:
+    #                         await click_func()
+    #                     download = await download_info.value
+    #                     # Determine file path
+    #                     suggested_filename = download.suggested_filename
+    #                     unique_filename = await super()._get_unique_filename(self.config.save_downloads_path, suggested_filename)
+    #                     download_path = os.path.join(self.config.save_downloads_path, unique_filename)
+    #                     await download.save_as(download_path)
+    #                     logger.debug(f'⬇️  Download triggered. Saved file to: {download_path}')
+    #                     return download_path
+    #                 except TimeoutError:
+    #                     # If no download is triggered, treat as normal click
+    #                     logger.debug('No download triggered within timeout. Checking navigation...')
+    #                     await page.wait_for_load_state()
+    #                     await super()._check_and_handle_navigation(page)
+    #             else:
+    #                 # Standard click logic if no download is expected
+    #                 await click_func()
+    #                 await page.wait_for_load_state()
+    #                 await super()._check_and_handle_navigation(page)
+
+    #         try:
+    #             # First ensure element is ready for interaction
+    #             await element_handle.wait_for_element_state('stable', timeout=2000)
+    #             # Scroll element into view for more reliable clicking
+    #             await element_handle.scroll_into_view_if_needed()
+                
+    #             # Try direct click first - most reliable for standard elements
+    #             return await perform_click(lambda: element_handle.click(
+    #                 force=False,  # Don't force click - let Playwright handle visibility checks
+    #                 delay=10,      # Slight delay for more realistic clicking 
+    #                 timeout=2000   # Generous timeout
+    #             ))
+    #         except URLNotAllowedError as e:
+    #             raise e
+    #         except Exception as e:
+    #             logger.debug(f"Standard click failed: {str(e)}. Trying JS click.")
+    #             try:
+    #                 # If standard click fails, try JavaScript click
+    #                 # This works better for some frameworks and custom elements
+    #                 return await perform_click(lambda: page.evaluate('''(el) => {
+    #                     // Dispatch proper mouse events before clicking for better compatibility
+    #                     const rect = el.getBoundingClientRect();
+    #                     const x = rect.left + rect.width / 2;
+    #                     const y = rect.top + rect.height / 2;
+                        
+    #                     // Create and dispatch more realistic events
+    #                     const mouseOverEvent = new MouseEvent('mouseover', {
+    #                         bubbles: true,
+    #                         cancelable: true,
+    #                         view: window,
+    #                         clientX: x,
+    #                         clientY: y
+    #                     });
+    #                     el.dispatchEvent(mouseOverEvent);
+                        
+    #                     // Short delay
+    #                     setTimeout(() => {
+    #                         // Then click
+    #                         el.click();
+    #                     }, 10);
+    #                 }''', element_handle))
+    #             except URLNotAllowedError as e:
+    #                 raise e
+    #             except Exception as e:
+    #                 raise Exception(f'All click methods failed: {str(e)}')
+
+    #     except URLNotAllowedError as e:
+    #         raise e
+    #     except Exception as e:
+    #         raise Exception(f'Failed to click element: {repr(element_node)}. Error: {str(e)}')
 
     async def human_like_typing(self, element_handle, text: str, min_delay: int = 50, max_delay: int = 150, reduced_randomness: bool = False):
         """
